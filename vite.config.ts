@@ -49,7 +49,7 @@ function booksApi(): Plugin {
           return
         }
         try {
-          const mod = (await server.ssrLoadModule('/src/server/recommend.ts')) as {
+          const mod = (await server.ssrLoadModule('/api/recommend.ts')) as {
             handleRecommend: (request: Request) => Promise<Response>
           }
           const response = await mod.handleRecommend(await toWebRequest(req))
