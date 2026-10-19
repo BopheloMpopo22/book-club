@@ -18,8 +18,25 @@ export type BookMatch = {
   why: string
 }
 
+export type SourceBook = {
+  title: string
+  authors: string[]
+  year: number | null
+  coverUrl: string | null
+  infoUrl: string
+  summary: string
+}
+
+export type BookGroup = {
+  id: string
+  label: string
+  books: BookMatch[]
+}
+
 export type RecommendResponse = {
   books: BookMatch[]
+  groups?: BookGroup[]
+  sourceBook?: SourceBook
   note: string
   usedAi: boolean
   error?: string

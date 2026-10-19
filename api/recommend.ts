@@ -12,11 +12,30 @@ type BookMatch = {
   why: string
 }
 
+type SourceBook = {
+  title: string
+  authors: string[]
+  year: number | null
+  coverUrl: string | null
+  infoUrl: string
+  summary: string
+}
+
+type BookGroup = {
+  id: string
+  label: string
+  books: BookMatch[]
+}
+
 type SearchInput = {
   query: string
   genres: string[]
   tropes: string[]
   movies: string[]
+  exclude: string[]
+  facet: string
+  sourceTitle: string
+  sourceAuthor: string
 }
 
 type Candidate = BookMatch & { editions: number }
@@ -282,62 +301,6 @@ function dedupe(books: Candidate[]): Candidate[] {
   return [...map.values()]
 }
 
-function tokens(value: string): string[] {
-  return value
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((word) => word.length > 2 && !STOP.has(word))
-}
-
-const STOP = new Set([
-  'the',
-  'and',
-  'for',
-  'with',
-  'that',
-  'this',
-  'from',
-  'book',
-  'books',
-  'like',
-  'novel',
-  'story',
-  'about',
-  'into',
-  'your',
-  'you',
-  'was',
-  'were',
-  'have',
-  'has',
-])
-
-function rank(books: Candidate[], input: SearchInput): Candidate[] {
-  const words = tokens(
-    [input.query, ...input.genres, ...input.tropes, ...input.movies].join(' '),
-  )
-  return books
-    .map((book) => {
-      const hay = `${book.title} ${book.authors.join(' ')} ${book.description}`.toLowerCase()
-      let score = 0
-      for (const word of words) {
-        if (hay.includes(word)) score += 2
-      }
-      if (book.coverUrl) score += 4
-      if (!book.coverUrl) score -= 8
-      if (book.description.length > 80) score += 3
-      if (book.year && book.year >= THIS_YEAR - 10 && book.year <= THIS_YEAR) score += 8
-      if (book.year && book.year >= THIS_YEAR - 4) score += 4
-      if (book.year != null && book.year < THIS_YEAR - 10) score -= 30
-      if (book.year && book.year > THIS_YEAR + 1) score -= 2
-      if (/[_]|novels\b|box ?set|omnibus|collection|complete series|books \d/i.test(book.title)) score -= 10
-      if (book.title.length > 90) score -= 2
-      return { book, score }
-    })
-    .sort((a, b) => b.score - a.score)
-    .map((item) => item.book)
-}
-
 async function attachDescriptions(books: Candidate[]): Promise<Candidate[]> {
   const targets = books.filter((book) => book.id.startsWith('ol:') && book.description.length < 40).slice(0, 8)
   await Promise.all(
@@ -373,7 +336,7 @@ function synthesizeNote(input: SearchInput): string {
   if (input.query) return `For “${clip(input.query, 110)}”`
   const parts = [...input.tropes, ...input.genres, ...input.movies]
   if (parts.length) return `For ${parts.join(', ')}`
-  return 'Closest recent matches'
+  return 'Closest matches'
 }
 
 function templateWhy(book: BookMatch, input: SearchInput): string {
@@ -434,70 +397,93 @@ async function askModel(system: string, user: string): Promise<unknown> {
   }
 }
 
-function wantsOlderBooks(input: SearchInput): boolean {
-  const text = [input.query, ...input.genres, ...input.tropes, ...input.movies].join(' ').toLowerCase()
-  return /\b(classic|classics|victorian|shakespeare|public domain|19th|18th|historical fiction)\b/.test(text)
-}
-
-function minimumYear(input: SearchInput): number {
-  return wantsOlderBooks(input) ? 0 : THIS_YEAR - 10
-}
-
 function lastName(author: string): string {
   const parts = author.split(' ').filter(Boolean)
   return parts[parts.length - 1] ?? ''
 }
 
 function titlesMatch(wanted: string, found: string): boolean {
-  const clean = (value: string) => normalize(value.replace(/\b(a novel|novel)\b/gi, ''))
-  const left = clean(wanted)
-  const right = clean(found)
-  if (left.length < 4 || right.length < 4) return false
-  return left === right || left.startsWith(right) || right.startsWith(left)
-}
-
-function isRecentEnough(book: Candidate, minYear: number, allowUnknown = false): boolean {
-  if (!minYear) return true
-  if (book.year == null) return allowUnknown
-  return book.year >= minYear
+  const core = (value: string) =>
+    normalize(
+      (value.split(/[:–—]/)[0] ?? value)
+        .replace(/\([^)]*\)/g, ' ')
+        .replace(/\bbook\s+\d+\b/gi, ' ')
+        .replace(/\b(a novel|novel)\b/gi, ''),
+    )
+  const left = core(wanted)
+  const right = core(found)
+  return left.length >= 4 && left === right
 }
 
 type TitlePick = { title: string; author: string; why: string }
 
-async function suggestTitles(input: SearchInput): Promise<{ note: string; picks: TitlePick[] } | null> {
-  const data = asRecord(
-    await askModel(
-      `You recommend real published novels for a specific feeling, job, setting, or situation. Prefer books published from ${THIS_YEAR - 10} to ${THIS_YEAR}, including recent romance and books readers talk about now, unless the reader explicitly asked for a classic or historical fiction. Return JSON {"note":"one sentence","books":[{"title":"exact title","author":"full author name","why":"one concrete sentence"}]} with 8 to 12 books. Only include books you are confident exist. Never invent a title or author.`,
-      JSON.stringify(input),
-    ),
-  )
-  if (!data) return null
-  const picks = Array.isArray(data.books)
-    ? data.books.flatMap((item) => {
-        const record = asRecord(item)
-        const title = typeof record?.title === 'string' ? record.title.trim() : ''
-        const author = typeof record?.author === 'string' ? record.author.trim() : ''
-        const why = typeof record?.why === 'string' ? clip(record.why, 240) : ''
-        return title && author && why ? [{ title, author, why }] : []
-      })
-    : []
-  if (picks.length === 0) return null
-  const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : synthesizeNote(input)
-  return { note, picks: picks.slice(0, 12) }
+type Plan =
+  | { mode: 'list'; note: string; picks: TitlePick[] }
+  | {
+      mode: 'similar'
+      source: { title: string; author: string; summary: string }
+      groups: { label: string; picks: TitlePick[] }[]
+    }
+
+function parsePicks(value: unknown, limit: number): TitlePick[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .flatMap((item) => {
+      const record = asRecord(item)
+      const title = typeof record?.title === 'string' ? record.title.trim() : ''
+      const author = typeof record?.author === 'string' ? record.author.trim() : ''
+      const why = typeof record?.why === 'string' ? clip(record.why, 240) : ''
+      return title && author && why ? [{ title, author, why }] : []
+    })
+    .slice(0, limit)
 }
 
-function pickMatch(found: Candidate[], title: string, authorBit: string, minYear: number): Candidate | null {
+function newestFirst(books: Candidate[]): Candidate[] {
+  return books.slice().sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
+}
+
+async function planRequest(input: SearchInput): Promise<Plan | null> {
+  const followUp = input.facet
+    ? `The reader confirmed ${input.sourceTitle} by ${input.sourceAuthor}. They want more books only for this angle: ${input.facet}. Do not repeat: ${input.exclude.join('; ') || 'none'}. Return JSON {"mode":"list","note":"${input.facet}","books":[{"title":"","author":"","why":""}]} with 8 real books.`
+    : input.exclude.length > 0
+      ? `Give 12 more real novels for this request. Any publication year. Do not repeat: ${input.exclude.join('; ')}. Return JSON {"mode":"list","note":"one sentence","books":[{"title":"","author":"","why":""}]}.`
+      : `Decide how to answer. If the reader names a book and does not already say which part they want, use mode similar. Use their exact title and author. Heartless by R.C. Martin is not Heartless by Marissa Meyer or Elsie Silver. summary must say what actually happens in that book. groups must be the specific ingredients of that book, each label starting with "If you want". Four groups, four books each. Do not use a vague label like "romance with a captivating narrative". If they name a book and also say what they want from it, use mode list and recommend only that ingredient. If they do not name a book, use mode list. Any publication year is allowed. Return JSON {"mode":"similar","source":{"title":"","author":"","summary":""},"groups":[{"label":"If you want ...","books":[{"title":"","author":"","why":""}]}]} or {"mode":"list","note":"one sentence","books":[{"title":"","author":"","why":""}]} with 12 books. Never invent a title.`
+
+  const data = asRecord(await askModel(followUp, JSON.stringify(input)))
+  if (!data) return null
+  if (data.mode === 'similar') {
+    const source = asRecord(data.source)
+    const title = typeof source?.title === 'string' ? source.title.trim() : ''
+    const author = typeof source?.author === 'string' ? source.author.trim() : ''
+    const summary = typeof source?.summary === 'string' ? clip(source.summary, 320) : ''
+    const groups = Array.isArray(data.groups)
+      ? data.groups.flatMap((item) => {
+          const record = asRecord(item)
+          const label = typeof record?.label === 'string' ? record.label.trim() : ''
+          const picks = parsePicks(record?.books, 4)
+          return label && picks.length ? [{ label, picks }] : []
+        })
+      : []
+    if (!title || !author || !summary || groups.length === 0) return null
+    return { mode: 'similar', source: { title, author, summary }, groups: groups.slice(0, 4) }
+  }
+  const picks = parsePicks(data.books, 12)
+  if (picks.length === 0) return null
+  const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : synthesizeNote(input)
+  return { mode: 'list', note, picks }
+}
+
+function pickMatch(found: Candidate[], title: string, authorBit: string): Candidate | null {
   const titleHits = found.filter((book) => titlesMatch(title, book.title))
   const authorHits = authorBit
     ? titleHits.filter((book) => book.authors.some((name) => normalize(name).includes(normalize(authorBit))))
     : []
-  const pool = authorHits.length > 0 ? authorHits : titleHits
-  const recent = pool.filter((book) => book.year == null || !minYear || book.year >= minYear)
-  recent.sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
-  return recent[0] ?? null
+  const pool = authorBit ? authorHits : titleHits
+  pool.sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
+  return pool[0] ?? null
 }
 
-async function lookupTitle(title: string, author: string, minYear: number): Promise<Candidate | null> {
+async function lookupTitle(title: string, author: string): Promise<Candidate | null> {
   const authorBit = lastName(author)
   const safeTitle = title.replace(/[&]/g, ' ')
   const googleQuery = authorBit ? `intitle:${safeTitle} inauthor:${authorBit}` : `intitle:${safeTitle}`
@@ -506,10 +492,10 @@ async function lookupTitle(title: string, author: string, minYear: number): Prom
     searchGoogle(googleQuery, 5),
     searchOpenLibrary(libraryQuery, 5),
   ])
-  return pickMatch([...google, ...library], title, authorBit, minYear)
+  return pickMatch([...google, ...library], title, authorBit)
 }
 
-async function recentFromCatalog(input: SearchInput, minYear: number): Promise<Candidate[]> {
+async function recentFromCatalog(input: SearchInput): Promise<Candidate[]> {
   const queries = fallbackQueries(input)
   const batches = await Promise.all(
     queries.map(async (query) => {
@@ -517,53 +503,82 @@ async function recentFromCatalog(input: SearchInput, minYear: number): Promise<C
       return [...google, ...library]
     }),
   )
-  const ranked = rank(dedupe(batches.flat()), input)
-    .filter((book) => isRecentEnough(book, minYear))
-    .filter(keep)
-    .slice(0, 12)
+  const ranked = newestFirst(dedupe(batches.flat()).filter(keep)).slice(0, 16)
   await attachDescriptions(ranked)
-  return ranked.map((book) => ({ ...book, why: book.why || templateWhy(book, input) }))
+  return newestFirst(ranked.map((book) => ({ ...book, why: book.why || templateWhy(book, input) })))
 }
 
-async function findBooks(input: SearchInput): Promise<{ books: BookMatch[]; note: string; usedAi: boolean }> {
-  const minYear = minimumYear(input)
-  const suggested = await suggestTitles(input)
-  const verified: Candidate[] = []
+async function verifyPicks(picks: TitlePick[], exclude: string[]): Promise<Candidate[]> {
+  const fresh = picks.filter((pick) => !exclude.some((title) => titlesMatch(title, pick.title)))
+  const lookups = await Promise.all(fresh.map((pick) => lookupTitle(pick.title, pick.author)))
+  const books: Candidate[] = []
+  lookups.forEach((book, index) => {
+    const pick = fresh[index]
+    if (!book || !pick) return
+    books.push({ ...book, why: pick.why })
+  })
+  return newestFirst(dedupe(books))
+}
 
-  if (suggested) {
-    const lookups = await Promise.all(
-      suggested.picks.map((pick) => lookupTitle(pick.title, pick.author, minYear)),
+async function findBooks(input: SearchInput): Promise<{
+  books: BookMatch[]
+  groups: BookGroup[]
+  sourceBook?: SourceBook
+  note: string
+  usedAi: boolean
+}> {
+  const plan = await planRequest(input)
+  if (!plan) {
+    const extras = (await recentFromCatalog(input)).filter(
+      (book) => !input.exclude.some((title) => titlesMatch(title, book.title)),
     )
-    lookups.forEach((book, index) => {
-      const pick = suggested.picks[index]
-      if (!book || !pick || !isRecentEnough(book, minYear, true)) return
-      verified.push({ ...book, why: pick.why })
-    })
+    return { books: extras.slice(0, 24).map(publish), groups: [], note: synthesizeNote(input), usedAi: false }
   }
 
-  const namedBooks = dedupe(verified)
-  const seen = new Set(namedBooks.map((book) => normalize(book.title)))
-  const extras = verified.length >= 8 ? [] : await recentFromCatalog(input, minYear)
-  for (const book of extras) {
-    if (namedBooks.length >= 12) break
-    if (seen.has(normalize(book.title))) continue
-    namedBooks.push(book)
-    seen.add(normalize(book.title))
+  if (plan.mode === 'list') {
+    let books = await verifyPicks(plan.picks, input.exclude)
+    if (books.length < 8 && input.exclude.length === 0 && !input.facet) {
+      const seen = new Set(books.map((book) => normalize(book.title)))
+      for (const book of await recentFromCatalog(input)) {
+        if (books.length >= 24) break
+        if (seen.has(normalize(book.title))) continue
+        books.push(book)
+        seen.add(normalize(book.title))
+      }
+      books = newestFirst(books)
+    }
+    return {
+      books: books.filter((book) => book.title && book.why).slice(0, 24).map(publish),
+      groups: [],
+      note: plan.note,
+      usedAi: true,
+    }
   }
 
-  const byYear = (book: Candidate) => book.year ?? 0
-  const named = namedBooks.filter((book) => suggested?.picks.some((pick) => titlesMatch(pick.title, book.title)))
-  const rest = namedBooks.filter((book) => !named.includes(book))
-  named.sort((a, b) => byYear(b) - byYear(a))
-  rest.sort((a, b) => byYear(b) - byYear(a))
+  const [sourceMatch, verifiedGroups] = await Promise.all([
+    lookupTitle(plan.source.title, plan.source.author),
+    Promise.all(
+      plan.groups.map(async (group, index) => ({
+        id: `${normalize(group.label).slice(0, 60) || 'angle'}-${index}`,
+        label: group.label,
+        books: (await verifyPicks(group.picks, input.exclude)).map(publish),
+      })),
+    ),
+  ])
 
   return {
-    books: [...named, ...rest]
-      .filter((book) => book.title && book.why && isRecentEnough(book, minYear))
-      .slice(0, 12)
-      .map(publish),
-    note: suggested?.note ?? synthesizeNote(input),
-    usedAi: Boolean(suggested),
+    books: [],
+    groups: verifiedGroups.filter((group) => group.books.length > 0),
+    sourceBook: {
+      title: sourceMatch?.title || plan.source.title,
+      authors: sourceMatch?.authors.length ? sourceMatch.authors : [plan.source.author],
+      year: sourceMatch?.year ?? null,
+      coverUrl: sourceMatch?.coverUrl ?? null,
+      infoUrl: sourceMatch?.infoUrl || `https://openlibrary.org/search?q=${encodeURIComponent(`${plan.source.title} ${plan.source.author}`)}`,
+      summary: plan.source.summary,
+    },
+    note: plan.source.summary,
+    usedAi: true,
   }
 }
 
@@ -627,6 +642,10 @@ export async function handleRecommend(request: Request): Promise<Response> {
     genres: cleanList(record.genres),
     tropes: cleanList(record.tropes),
     movies: cleanList(record.movies),
+    exclude: cleanList(record.exclude, 60),
+    facet: typeof record.facet === 'string' ? record.facet.trim().slice(0, 180) : '',
+    sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle.trim().slice(0, 180) : '',
+    sourceAuthor: typeof record.sourceAuthor === 'string' ? record.sourceAuthor.trim().slice(0, 120) : '',
   }
 
   if (!input.query && input.genres.length + input.tropes.length + input.movies.length === 0) {
@@ -635,7 +654,8 @@ export async function handleRecommend(request: Request): Promise<Response> {
 
   try {
     const result = await findBooks(input)
-    await cacheResult(result.books, input)
+    const found = [...result.books, ...result.groups.flatMap((group) => group.books)]
+    await cacheResult(found, input)
     return json(result)
   } catch {
     return json({ error: 'The shelf is busy. Try again in a moment.' }, 500)

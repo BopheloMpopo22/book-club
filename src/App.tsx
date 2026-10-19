@@ -1,7 +1,18 @@
 import { useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { genres, movies, siteLine, siteName, tropes } from './data/discover.ts'
 import { shelf } from './data/shelf.ts'
-import type { BookMatch, RecommendResponse, ShelfBook } from './types.ts'
+import type { BookGroup, BookMatch, RecommendResponse, ShelfBook, SourceBook } from './types.ts'
+
+const PAGE = 12
+
+function newest(list: BookMatch[]): BookMatch[] {
+  return [...list].sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
+}
+
+function mergeBooks(current: BookMatch[], incoming: BookMatch[]): BookMatch[] {
+  const seen = new Set(current.map((book) => book.id))
+  return newest([...current, ...incoming.filter((book) => !seen.has(book.id))])
+}
 
 type Phase = 'idle' | 'loading' | 'ready'
 
@@ -21,8 +32,16 @@ export default function App() {
   const [pickedMovies, setMovies] = useState<string[]>([])
   const [phase, setPhase] = useState<Phase>('idle')
   const [books, setBooks] = useState<BookMatch[]>([])
+  const [groups, setGroups] = useState<BookGroup[]>([])
+  const [sourceBook, setSourceBook] = useState<SourceBook | null>(null)
+  const [visible, setVisible] = useState(PAGE)
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
+  const [canLoadMore, setCanLoadMore] = useState(true)
+  const [exhaustedGroups, setExhaustedGroups] = useState<Record<string, boolean>>({})
+  const [loadingMore, setLoadingMore] = useState('')
+  const [correcting, setCorrecting] = useState(false)
+  const [correction, setCorrection] = useState('')
   const [brokenCovers, setBrokenCovers] = useState<Record<string, boolean>>({})
   const busy = useRef(false)
 
@@ -39,6 +58,30 @@ export default function App() {
     if (group === 'movie') setMovies((current) => current.filter((item) => item !== label))
   }
 
+  async function ask(body: Record<string, unknown>): Promise<RecommendResponse | null> {
+    const response = await fetch('/api/recommend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const data = (await response.json()) as RecommendResponse
+    if (!response.ok) {
+      setError(data.error || 'Search failed.')
+      return null
+    }
+    return data
+  }
+
+  function requestBody(text: string, extra: Record<string, unknown> = {}) {
+    return {
+      query: text,
+      genres: pickedGenres,
+      tropes: pickedTropes,
+      movies: pickedMovies,
+      ...extra,
+    }
+  }
+
   async function search(nextQuery = query) {
     const text = nextQuery.trim()
     if (busy.current) return
@@ -47,28 +90,30 @@ export default function App() {
     setQuery(nextQuery)
     setPhase('loading')
     setError('')
+    setBooks([])
+    setGroups([])
+    setSourceBook(null)
+    setVisible(PAGE)
+    setCanLoadMore(true)
+    setExhaustedGroups({})
+    setCorrecting(false)
+    setCorrection('')
     try {
-      const response = await fetch('/api/recommend', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: text,
-          genres: pickedGenres,
-          tropes: pickedTropes,
-          movies: pickedMovies,
-        }),
-      })
-      const data = (await response.json()) as RecommendResponse
-      if (!response.ok) {
+      const data = await ask(requestBody(text))
+      if (!data) {
         setPhase('ready')
-        setBooks([])
-        setError(data.error || 'Search failed.')
         return
       }
-      setBooks(data.books ?? [])
+      const nextBooks = newest(data.books ?? [])
+      const nextGroups = data.groups ?? []
+      setBooks(nextBooks)
+      setGroups(nextGroups)
+      setSourceBook(data.sourceBook ?? null)
       setNote(data.note ?? '')
+      setVisible(PAGE)
+      setCanLoadMore(true)
       setPhase('ready')
-      if (!data.books?.length) {
+      if (!nextBooks.length && !nextGroups.length && !data.sourceBook) {
         setError('Nothing close enough turned up. Name the hero, the job, or a book it felt like.')
       }
       requestAnimationFrame(() => {
@@ -78,6 +123,49 @@ export default function App() {
       setPhase('ready')
       setError('Folio could not reach the catalogs. Try again in a moment.')
     } finally {
+      busy.current = false
+    }
+  }
+
+  async function loadMore(group?: BookGroup) {
+    const text = query.trim()
+    if (busy.current || !text) return
+    if (!group && visible < books.length) {
+      setVisible((count) => Math.min(books.length, count + PAGE))
+      return
+    }
+    busy.current = true
+    setLoadingMore(group?.id ?? 'list')
+    setError('')
+    try {
+      const data = await ask(
+        requestBody(text, {
+          exclude: (group ? group.books : books).map((book) => book.title),
+          facet: group?.label ?? '',
+          sourceTitle: sourceBook?.title ?? '',
+          sourceAuthor: sourceBook?.authors[0] ?? '',
+        }),
+      )
+      if (!data) return
+      const incoming = newest(data.books ?? [])
+      if (!group) {
+        const next = mergeBooks(books, incoming)
+        if (next.length === books.length) setCanLoadMore(false)
+        else {
+          setBooks(next)
+          setVisible((count) => count + PAGE)
+        }
+      } else if (incoming.length === 0) {
+        setExhaustedGroups((current) => ({ ...current, [group.id]: true }))
+      } else {
+        setGroups((current) =>
+          current.map((item) => (item.id === group.id ? { ...item, books: mergeBooks(item.books, incoming) } : item)),
+        )
+      }
+    } catch {
+      setError('Folio could not reach the catalogs. Try again in a moment.')
+    } finally {
+      setLoadingMore('')
       busy.current = false
     }
   }
@@ -100,8 +188,15 @@ export default function App() {
     setTropes([])
     setMovies([])
     setBooks([])
+    setGroups([])
+    setSourceBook(null)
+    setVisible(PAGE)
     setNote('')
     setError('')
+    setCanLoadMore(true)
+    setExhaustedGroups({})
+    setCorrecting(false)
+    setCorrection('')
     setPhase('idle')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -150,13 +245,13 @@ export default function App() {
               onKeyDown={onKeyDown}
             />
           </div>
-          <button className="send" type="submit" disabled={!canSearch || phase === 'loading'} aria-label="Find books">
+          <button className="send" type="submit" disabled={!canSearch || phase === 'loading' || Boolean(loadingMore)} aria-label="Find books">
             {phase === 'loading' ? <span className="spinner" /> : <ArrowIcon />}
           </button>
         </form>
 
         <p className="status" role="status">
-          {phase === 'loading' ? 'Looking through recent books…' : error}
+          {phase === 'loading' ? 'Finding the closest books…' : error}
         </p>
 
         <section className="filters" aria-label="Ways to describe a book">
@@ -183,7 +278,7 @@ export default function App() {
 
         {phase !== 'idle' && (
           <section className="matches" id="matches" aria-live="polite">
-            {phase === 'loading' && books.length === 0 ? (
+            {phase === 'loading' && books.length === 0 && groups.length === 0 ? (
               <div className="skeletons" aria-hidden="true">
                 <span />
                 <span />
@@ -191,18 +286,96 @@ export default function App() {
               </div>
             ) : (
               <>
-                {note && books.length > 0 && <h2>{note}</h2>}
-                <ul>
-                  {books.map((book) => (
-                    <li key={book.id}>
-                      <ResultBook
-                        book={book}
-                        broken={Boolean(brokenCovers[book.id])}
-                        onBroken={() => setBrokenCovers((current) => ({ ...current, [book.id]: true }))}
-                      />
-                    </li>
-                  ))}
-                </ul>
+                {sourceBook && (
+                  <article className="source">
+                    <Cover
+                      title={sourceBook.title}
+                      src={sourceBook.coverUrl}
+                      broken={Boolean(brokenCovers[sourceBook.title])}
+                      onBroken={() => setBrokenCovers((current) => ({ ...current, [sourceBook.title]: true }))}
+                    />
+                    <div>
+                      <p className="eyebrow">This is the book</p>
+                      <h2>
+                        <a href={sourceBook.infoUrl} target="_blank" rel="noreferrer">
+                          {sourceBook.title}
+                        </a>
+                      </h2>
+                      <p className="meta">{meta(sourceBook.authors, sourceBook.year)}</p>
+                      <p className="why">{sourceBook.summary}</p>
+                      {correcting ? (
+                        <form
+                          className="correct"
+                          onSubmit={(event) => {
+                            event.preventDefault()
+                            const text = correction.trim()
+                            if (text) void search(`Books similar to ${text}`)
+                          }}
+                        >
+                          <label className="sr-only" htmlFor="correction">
+                            The book you meant
+                          </label>
+                          <input
+                            id="correction"
+                            value={correction}
+                            placeholder="Title and author"
+                            onChange={(event) => setCorrection(event.target.value)}
+                          />
+                          <button type="submit" className="more" disabled={!correction.trim()}>
+                            Use this book
+                          </button>
+                        </form>
+                      ) : (
+                        <button type="button" className="quiet" onClick={() => setCorrecting(true)}>
+                          Not this book
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                )}
+                {groups.map((group) => (
+                  <div className="group" key={group.id}>
+                    <h2>{group.label}</h2>
+                    <BookList
+                      books={group.books}
+                      brokenCovers={brokenCovers}
+                      onBroken={(id) => setBrokenCovers((current) => ({ ...current, [id]: true }))}
+                    />
+                    {!exhaustedGroups[group.id] && (
+                      <button
+                        type="button"
+                        className="more"
+                        disabled={loadingMore === group.id}
+                        onClick={() => void loadMore(group)}
+                      >
+                        {loadingMore === group.id ? 'Looking…' : 'More'}
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {books.length > 0 && (
+                  <>
+                    {note && !sourceBook && <h2>{note}</h2>}
+                    <BookList
+                      books={books.slice(0, visible)}
+                      brokenCovers={brokenCovers}
+                      onBroken={(id) => setBrokenCovers((current) => ({ ...current, [id]: true }))}
+                    />
+                    {(visible < books.length || canLoadMore) && (
+                      <button
+                        type="button"
+                        className="more"
+                        disabled={loadingMore === 'list'}
+                        onClick={() => void loadMore()}
+                      >
+                        {loadingMore === 'list' ? 'Looking…' : 'More'}
+                      </button>
+                    )}
+                  </>
+                )}
+                {sourceBook && groups.length === 0 && books.length === 0 && (
+                  <p className="meta">Name the part you want, like the affair or the age gap, and Folio will look for that.</p>
+                )}
               </>
             )}
           </section>
@@ -297,6 +470,26 @@ function ShelfCard({
       <span className="shelf-title">{book.title}</span>
       <span className="shelf-author">{book.authors[0]}</span>
     </button>
+  )
+}
+
+function BookList({
+  books,
+  brokenCovers,
+  onBroken,
+}: {
+  books: BookMatch[]
+  brokenCovers: Record<string, boolean>
+  onBroken: (id: string) => void
+}) {
+  return (
+    <ul>
+      {books.map((book) => (
+        <li key={book.id}>
+          <ResultBook book={book} broken={Boolean(brokenCovers[book.id])} onBroken={() => onBroken(book.id)} />
+        </li>
+      ))}
+    </ul>
   )
 }
 

@@ -222,13 +222,88 @@ textarea::placeholder {
   scroll-margin-top: 20px;
 }
 
-.matches h2 {
+.matches h2,
+.source h2 {
   margin: 0 0 8px;
   font-family: var(--serif);
   font-size: 28px;
   font-weight: 520;
   letter-spacing: -0.03em;
   line-height: 1.25;
+}
+
+.source {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 18px;
+  padding: 8px 0 8px;
+}
+
+.source a {
+  text-decoration: none;
+}
+
+.source a:hover {
+  color: var(--coral);
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  color: var(--coral);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.group {
+  margin-top: 28px;
+}
+
+.more,
+.quiet {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.more {
+  margin: 8px 0 4px;
+  color: var(--coral);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.more:disabled {
+  opacity: 0.55;
+}
+
+.quiet {
+  margin-top: 10px;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.correct {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.correct input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 6px 0;
 }
 
 .matches ul {
@@ -247,6 +322,8 @@ textarea::placeholder {
 
 .result img,
 .result .spine,
+.source img,
+.source .spine,
 .shelf-card img,
 .shelf-card .spine {
   width: 92px;
@@ -462,19 +539,23 @@ textarea::placeholder {
     gap: 4px 16px;
   }
 
-  .result {
+  .result,
+  .source {
     grid-template-columns: 74px 1fr;
     gap: 14px;
   }
 
   .result img,
-  .result .spine {
+  .result .spine,
+  .source img,
+  .source .spine {
     width: 74px;
     height: 112px;
   }
 
   .result h3,
   .matches h2,
+  .source h2,
   .shelf-head h2 {
     font-size: 22px;
   }
