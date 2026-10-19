@@ -21,11 +21,6 @@ type SearchInput = {
 
 type Candidate = BookMatch & { editions: number }
 
-type PlannedSearch = {
-  queries: string[]
-  note: string
-}
-
 const USER_AGENT = 'FolioBookFinder/0.1 (book recommendation site)'
 const THIS_YEAR = new Date().getFullYear()
 
@@ -180,10 +175,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
 }
 
-async function searchGoogle(query: string): Promise<Candidate[]> {
+async function searchGoogle(query: string, count = 8): Promise<Candidate[]> {
   const params = new URLSearchParams({
     q: query,
-    maxResults: '8',
+    maxResults: String(count),
     printType: 'books',
     langRestrict: 'en',
     orderBy: 'relevance',
@@ -230,10 +225,10 @@ async function searchGoogle(query: string): Promise<Candidate[]> {
   return books
 }
 
-async function searchOpenLibrary(query: string): Promise<Candidate[]> {
+async function searchOpenLibrary(query: string, count = 8): Promise<Candidate[]> {
   const params = new URLSearchParams({
     q: query,
-    limit: '8',
+    limit: String(count),
     language: 'eng',
     fields: 'key,title,author_name,first_publish_year,cover_i,isbn,edition_count',
   })
@@ -330,13 +325,9 @@ function rank(books: Candidate[], input: SearchInput): Candidate[] {
       if (book.coverUrl) score += 4
       if (!book.coverUrl) score -= 8
       if (book.description.length > 80) score += 3
-      if (book.editions >= 8) score += 4
-      else if (book.editions >= 3) score += 2
-      else if (book.editions <= 1) score -= 3
-      if (book.id.startsWith('gb:')) score += 1
-      if (book.year && book.year >= THIS_YEAR - 8 && book.year <= THIS_YEAR) score += 4
-      if (book.year && book.year >= THIS_YEAR - 3) score += 2
-      if (book.year && book.year < 2005) score -= 8
+      if (book.year && book.year >= THIS_YEAR - 10 && book.year <= THIS_YEAR) score += 8
+      if (book.year && book.year >= THIS_YEAR - 4) score += 4
+      if (book.year != null && book.year < THIS_YEAR - 10) score -= 30
       if (book.year && book.year > THIS_YEAR + 1) score -= 2
       if (/[_]|novels\b|box ?set|omnibus|collection|complete series|books \d/i.test(book.title)) score -= 10
       if (book.title.length > 90) score -= 2
@@ -439,84 +430,130 @@ async function askModel(system: string, user: string): Promise<unknown> {
   }
 }
 
-async function planSearch(input: SearchInput): Promise<PlannedSearch | null> {
+function wantsOlderBooks(input: SearchInput): boolean {
+  const text = [input.query, ...input.genres, ...input.tropes, ...input.movies].join(' ').toLowerCase()
+  return /\b(classic|classics|victorian|shakespeare|public domain|19th|18th|historical fiction)\b/.test(text)
+}
+
+function minimumYear(input: SearchInput): number {
+  return wantsOlderBooks(input) ? 0 : THIS_YEAR - 10
+}
+
+function lastName(author: string): string {
+  const parts = author.split(' ').filter(Boolean)
+  return parts[parts.length - 1] ?? ''
+}
+
+function titlesMatch(wanted: string, found: string): boolean {
+  const clean = (value: string) => normalize(value.replace(/\b(a novel|novel)\b/gi, ''))
+  const left = clean(wanted)
+  const right = clean(found)
+  if (left.length < 4 || right.length < 4) return false
+  return left === right || left.startsWith(right) || right.startsWith(left)
+}
+
+function isRecentEnough(book: Candidate, minYear: number, allowUnknown = false): boolean {
+  if (!minYear) return true
+  if (book.year == null) return allowUnknown
+  return book.year >= minYear
+}
+
+type TitlePick = { title: string; author: string; why: string }
+
+async function suggestTitles(input: SearchInput): Promise<{ note: string; picks: TitlePick[] } | null> {
   const data = asRecord(
     await askModel(
-      'You turn a reader’s specific taste into catalog searches for a book finder aimed at current fiction, including BookTok romance, romantasy, and thrillers. Prefer books from 2016 onward unless they clearly asked for a classic. Return JSON {"queries":["short catalog search","short catalog search","short catalog search"],"note":"one sentence naming what they actually want"}. Queries are search phrases, not the reader’s whole paragraph. Use concrete nouns: job, setting, character, trope, comparison title, or film. Do not invent book titles in this step.',
+      `You recommend real published novels for a specific feeling, job, setting, or situation. Prefer books published from ${THIS_YEAR - 10} to ${THIS_YEAR}, including recent romance and books readers talk about now, unless the reader explicitly asked for a classic or historical fiction. Return JSON {"note":"one sentence","books":[{"title":"exact title","author":"full author name","why":"one concrete sentence"}]} with 8 to 12 books. Only include books you are confident exist. Never invent a title or author.`,
       JSON.stringify(input),
     ),
   )
   if (!data) return null
-  const queries = Array.isArray(data.queries)
-    ? data.queries.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 3)
+  const picks = Array.isArray(data.books)
+    ? data.books.flatMap((item) => {
+        const record = asRecord(item)
+        const title = typeof record?.title === 'string' ? record.title.trim() : ''
+        const author = typeof record?.author === 'string' ? record.author.trim() : ''
+        const why = typeof record?.why === 'string' ? clip(record.why, 240) : ''
+        return title && author && why ? [{ title, author, why }] : []
+      })
     : []
-  if (queries.length === 0) return null
-  const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : synthesizeNote(input)
-  return { queries, note }
-}
-
-async function chooseWithAi(input: SearchInput, books: Candidate[], note: string): Promise<Candidate[] | null> {
-  const payload = books.map((book) => ({
-    id: book.id,
-    title: book.title,
-    authors: book.authors,
-    year: book.year,
-    description: book.description,
-  }))
-  const data = asRecord(
-    await askModel(
-      'You match real books to a specific taste. Choose only from the provided list. Never invent a title, author, or plot. Return JSON {"books":[{"id":"exact id","why":"one sentence"}]} with up to 6 books. The why should sound like a well-read friend and name the specific thing the reader asked for. No hashtags, no emoji, no "you might also like".',
-      JSON.stringify({ taste: input, understood: note, books: payload }),
-    ),
-  )
-  const picks = Array.isArray(data?.books) ? data.books : []
   if (picks.length === 0) return null
-  const chosen: Candidate[] = []
-  const seen = new Set<string>()
-  for (const pick of picks) {
-    const record = asRecord(pick)
-    const why = typeof record?.why === 'string' ? clip(record.why, 240) : ''
-    if (!why) continue
-    const id = typeof record?.id === 'string' ? record.id : ''
-    const title = typeof record?.title === 'string' ? normalize(record.title) : ''
-    const book =
-      books.find((item) => item.id === id) ||
-      books.find((item) => title && normalize(item.title) === title)
-    if (!book || seen.has(book.id)) continue
-    seen.add(book.id)
-    chosen.push({ ...book, why })
-  }
-  if (chosen.length === 0) return null
-  for (const book of books) {
-    if (chosen.length >= 6) break
-    if (seen.has(book.id)) continue
-    seen.add(book.id)
-    chosen.push({ ...book, why: templateWhy(book, input) })
-  }
-  return chosen.slice(0, 6)
+  const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : synthesizeNote(input)
+  return { note, picks: picks.slice(0, 12) }
 }
 
-async function findBooks(input: SearchInput): Promise<{ books: BookMatch[]; note: string; usedAi: boolean }> {
-  const planned = await planSearch(input)
-  const queries = planned?.queries ?? fallbackQueries(input)
+async function lookupTitle(title: string, author: string): Promise<Candidate | null> {
+  const authorBit = lastName(author)
+  const googleQuery = authorBit ? `intitle:${title} inauthor:${authorBit}` : `intitle:${title}`
+  const libraryQuery = authorBit ? `${title} ${authorBit}` : title
+  const [google, library] = await Promise.all([
+    searchGoogle(googleQuery, 5),
+    searchOpenLibrary(libraryQuery, 5),
+  ])
+  const found = [...google, ...library]
+  const named = authorBit
+    ? found.find(
+        (book) =>
+          titlesMatch(title, book.title) &&
+          book.authors.some((name) => normalize(name).includes(normalize(authorBit))),
+      )
+    : undefined
+  return named ?? found.find((book) => titlesMatch(title, book.title)) ?? null
+}
+
+async function recentFromCatalog(input: SearchInput, minYear: number): Promise<Candidate[]> {
+  const queries = fallbackQueries(input)
   const batches = await Promise.all(
     queries.map(async (query) => {
-      const [google, library] = await Promise.all([searchGoogle(query), searchOpenLibrary(query)])
+      const [google, library] = await Promise.all([searchGoogle(query, 12), searchOpenLibrary(query, 12)])
       return [...google, ...library]
     }),
   )
-  let ranked = rank(dedupe(batches.flat()), input).slice(0, 16)
+  const ranked = rank(dedupe(batches.flat()), input)
+    .filter((book) => isRecentEnough(book, minYear))
+    .filter(keep)
+    .slice(0, 12)
   await attachDescriptions(ranked)
-  ranked = rank(ranked, input).filter(keep)
-  const note = planned?.note ?? synthesizeNote(input)
-  const pool = ranked.slice(0, 10)
-  const chosen =
-    (await chooseWithAi(input, pool, note)) ??
-    pool.slice(0, 6).map((book) => ({ ...book, why: templateWhy(book, input) }))
+  return ranked.map((book) => ({ ...book, why: book.why || templateWhy(book, input) }))
+}
+
+async function findBooks(input: SearchInput): Promise<{ books: BookMatch[]; note: string; usedAi: boolean }> {
+  const minYear = minimumYear(input)
+  const suggested = await suggestTitles(input)
+  const verified: Candidate[] = []
+
+  if (suggested) {
+    const lookups = await Promise.all(suggested.picks.map((pick) => lookupTitle(pick.title, pick.author)))
+    lookups.forEach((book, index) => {
+      const pick = suggested.picks[index]
+      if (!book || !pick || !isRecentEnough(book, minYear, true)) return
+      verified.push({ ...book, why: pick.why })
+    })
+  }
+
+  const namedBooks = dedupe(verified)
+  const seen = new Set(namedBooks.map((book) => normalize(book.title)))
+  const extras = verified.length >= 8 ? [] : await recentFromCatalog(input, minYear)
+  for (const book of extras) {
+    if (namedBooks.length >= 12) break
+    if (seen.has(normalize(book.title))) continue
+    namedBooks.push(book)
+    seen.add(normalize(book.title))
+  }
+
+  const byYear = (book: Candidate) => book.year ?? 0
+  const named = namedBooks.filter((book) => suggested?.picks.some((pick) => titlesMatch(pick.title, book.title)))
+  const rest = namedBooks.filter((book) => !named.includes(book))
+  named.sort((a, b) => byYear(b) - byYear(a))
+  rest.sort((a, b) => byYear(b) - byYear(a))
+
   return {
-    books: chosen.filter((book) => book.title && book.why && keep(book)).slice(0, 6).map(publish),
-    note,
-    usedAi: Boolean(planned),
+    books: [...named, ...rest]
+      .filter((book) => book.title && book.why && isRecentEnough(book, minYear))
+      .slice(0, 12)
+      .map(publish),
+    note: suggested?.note ?? synthesizeNote(input),
+    usedAi: Boolean(suggested),
   }
 }
 
