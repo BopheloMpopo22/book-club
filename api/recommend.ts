@@ -115,6 +115,7 @@ function keep(book: Candidate): boolean {
   if (!book.coverUrl) return false
   if (book.title.length > 80) return false
   if (/[_]|novels\b|box ?set|omnibus|complete series/i.test(book.title)) return false
+  if (book.year != null && book.year >= THIS_YEAR - 10) return true
   if (book.editions <= 1 && book.description.length < 80) return false
   return true
 }
@@ -357,11 +358,14 @@ async function attachDescriptions(books: Candidate[]): Promise<Candidate[]> {
 
 function fallbackQueries(input: SearchInput): string[] {
   const queries: string[] = []
-  if (input.query) queries.push(`${input.query} novel`)
+  const text = [input.query, ...input.tropes, ...input.genres].join(' ').toLowerCase()
+  if (/\b(law|lawyer|attorney|legal)\b/.test(text)) queries.push('lawyer romance novel')
+  if (/\b(workplace|office|job|career|firm)\b/.test(text)) queries.push('workplace romance novel')
+  if (/\bromance\b/.test(text)) queries.push('contemporary romance novel')
   for (const trope of input.tropes) queries.push(TROPE_QUERIES[trope] ?? `${trope} novel`)
-  if (input.genres[0] && !input.tropes.length && !input.query) queries.push(`${input.genres[0]} novel`)
+  if (input.genres[0]) queries.push(`${input.genres[0]} novel`)
   for (const movie of input.movies) queries.push(`novels like the movie ${movie}`)
-  if (queries.length === 0) queries.push('popular recent romance fantasy novel')
+  if (queries.length === 0) queries.push('popular recent romance novel')
   return [...new Set(queries.map((query) => query.replace(/\s+/g, ' ').trim()))].slice(0, 3)
 }
 
@@ -482,23 +486,27 @@ async function suggestTitles(input: SearchInput): Promise<{ note: string; picks:
   return { note, picks: picks.slice(0, 12) }
 }
 
-async function lookupTitle(title: string, author: string): Promise<Candidate | null> {
+function pickMatch(found: Candidate[], title: string, authorBit: string, minYear: number): Candidate | null {
+  const titleHits = found.filter((book) => titlesMatch(title, book.title))
+  const authorHits = authorBit
+    ? titleHits.filter((book) => book.authors.some((name) => normalize(name).includes(normalize(authorBit))))
+    : []
+  const pool = authorHits.length > 0 ? authorHits : titleHits
+  const recent = pool.filter((book) => book.year == null || !minYear || book.year >= minYear)
+  recent.sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
+  return recent[0] ?? null
+}
+
+async function lookupTitle(title: string, author: string, minYear: number): Promise<Candidate | null> {
   const authorBit = lastName(author)
-  const googleQuery = authorBit ? `intitle:${title} inauthor:${authorBit}` : `intitle:${title}`
-  const libraryQuery = authorBit ? `${title} ${authorBit}` : title
+  const safeTitle = title.replace(/[&]/g, ' ')
+  const googleQuery = authorBit ? `intitle:${safeTitle} inauthor:${authorBit}` : `intitle:${safeTitle}`
+  const libraryQuery = authorBit ? `${safeTitle} ${authorBit}` : safeTitle
   const [google, library] = await Promise.all([
     searchGoogle(googleQuery, 5),
     searchOpenLibrary(libraryQuery, 5),
   ])
-  const found = [...google, ...library]
-  const named = authorBit
-    ? found.find(
-        (book) =>
-          titlesMatch(title, book.title) &&
-          book.authors.some((name) => normalize(name).includes(normalize(authorBit))),
-      )
-    : undefined
-  return named ?? found.find((book) => titlesMatch(title, book.title)) ?? null
+  return pickMatch([...google, ...library], title, authorBit, minYear)
 }
 
 async function recentFromCatalog(input: SearchInput, minYear: number): Promise<Candidate[]> {
@@ -523,7 +531,9 @@ async function findBooks(input: SearchInput): Promise<{ books: BookMatch[]; note
   const verified: Candidate[] = []
 
   if (suggested) {
-    const lookups = await Promise.all(suggested.picks.map((pick) => lookupTitle(pick.title, pick.author)))
+    const lookups = await Promise.all(
+      suggested.picks.map((pick) => lookupTitle(pick.title, pick.author, minYear)),
+    )
     lookups.forEach((book, index) => {
       const pick = suggested.picks[index]
       if (!book || !pick || !isRecentEnough(book, minYear, true)) return
