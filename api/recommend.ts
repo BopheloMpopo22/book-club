@@ -36,7 +36,6 @@ type SearchInput = {
   facet: string
   sourceTitle: string
   sourceAuthor: string
-  sourceSummary: string
 }
 
 type Candidate = BookMatch & { editions: number }
@@ -251,7 +250,7 @@ async function searchOpenLibrary(query: string, count = 8): Promise<Candidate[]>
     q: query,
     limit: String(count),
     language: 'eng',
-    fields: 'key,title,author_name,first_publish_year,cover_i,isbn,edition_count,first_sentence',
+    fields: 'key,title,author_name,first_publish_year,cover_i,isbn,edition_count',
   })
   const data = asRecord(await fetchJson(`https://openlibrary.org/search.json?${params}`))
   const docs = Array.isArray(data?.docs) ? data.docs : []
@@ -268,18 +267,12 @@ async function searchOpenLibrary(query: string, count = 8): Promise<Candidate[]>
     const isbn = Array.isArray(record?.isbn)
       ? record.isbn.find((value): value is string => typeof value === 'string')
       : undefined
-    const sentence = record?.first_sentence
-    const firstSentence = Array.isArray(sentence)
-      ? sentence.find((value): value is string => typeof value === 'string') ?? ''
-      : typeof sentence === 'string'
-        ? sentence
-        : ''
     books.push({
       id: `ol:${key}`,
       title: clip(title, 180),
       authors,
       year: yearFrom(record?.first_publish_year),
-      description: clip(plain(firstSentence), 360),
+      description: '',
       coverUrl: coverId ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg` : null,
       infoUrl: isbn ? `https://openlibrary.org/isbn/${isbn}` : `https://openlibrary.org${key}`,
       why: '',
@@ -367,15 +360,11 @@ function parseJson(text: string): unknown {
   return JSON.parse(fenced?.[1] ?? trimmed)
 }
 
-async function askModel(
-  system: string,
-  user: string,
-  options?: { timeoutMs?: number; temperature?: number },
-): Promise<unknown> {
+async function askModel(system: string, user: string): Promise<unknown> {
   const key = readEnv('OPENAI_API_KEY')
   if (!key) return null
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), options?.timeoutMs ?? 12000)
+  const timer = setTimeout(() => controller.abort(), 12000)
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -386,7 +375,7 @@ async function askModel(
       },
       body: JSON.stringify({
         model: readEnv('OPENAI_MODEL') || 'gpt-4o-mini',
-        temperature: options?.temperature ?? 0.4,
+        temperature: 0.4,
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: system },
@@ -453,83 +442,30 @@ function newestFirst(books: Candidate[]): Candidate[] {
   return books.slice().sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
 }
 
-function parseGroups(value: unknown): { label: string; picks: TitlePick[] }[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .flatMap((item) => {
-      const record = asRecord(item)
-      const label = typeof record?.label === 'string' ? record.label.trim() : ''
-      const picks = parsePicks(record?.books, 4)
-      return label && picks.length ? [{ label, picks }] : []
-    })
-    .slice(0, 4)
-}
-
-function parseSimilar(data: Record<string, unknown> | null, fallback?: { title: string; author: string }): Plan | null {
-  if (!data || data.mode !== 'similar') return null
-  const source = asRecord(data.source)
-  const title = (typeof source?.title === 'string' && source.title.trim()) || fallback?.title || ''
-  const author = (typeof source?.author === 'string' && source.author.trim()) || fallback?.author || ''
-  const summary = typeof source?.summary === 'string' ? clip(source.summary, 320) : ''
-  const groups = parseGroups(data.groups).filter(
-    (group) => !describesAnotherBook(`${group.label} ${group.picks.map((pick) => pick.why).join(' ')}`, author),
-  )
-  if (!title || !author || !summary || describesAnotherBook(summary, author) || groups.length === 0) return null
-  return { mode: 'similar', source: { title, author, summary }, groups }
-}
-
-async function planRequest(input: SearchInput, matched?: Candidate | null): Promise<Plan | null> {
-  const matchedNote = matched
-    ? {
-        title: matched.title,
-        authors: matched.authors,
-        year: matched.year,
-        catalogDescription: matched.description,
-      }
-    : null
+async function planRequest(input: SearchInput): Promise<Plan | null> {
   const followUp = input.facet
-    ? `The reader confirmed ${input.sourceTitle} by ${input.sourceAuthor}. Plot already established: ${input.sourceSummary || 'use only this author'}. They want more books only for this angle: ${input.facet}. Do not switch to a different novel that shares the title. Do not repeat: ${input.exclude.join('; ') || 'none'}. Return JSON {"mode":"list","note":"${input.facet}","books":[{"title":"","author":"","why":""}]} with 8 real books.`
+    ? `The reader confirmed ${input.sourceTitle} by ${input.sourceAuthor}. They want more books only for this angle: ${input.facet}. Do not repeat: ${input.exclude.join('; ') || 'none'}. Return JSON {"mode":"list","note":"${input.facet}","books":[{"title":"","author":"","why":""}]} with 8 real books.`
     : input.exclude.length > 0
       ? `Give 12 more real novels for this request. Any publication year. Do not repeat: ${input.exclude.join('; ')}. Return JSON {"mode":"list","note":"one sentence","books":[{"title":"","author":"","why":""}]}.`
-      : `Several different novels can share one title. Heartless by R.C. Martin is a contemporary romance. Heartless by Marissa Meyer is the Wonderland novel. Heartless by Elsie Silver and Heartless by Kat Martin are other books. Never describe one of them with another author's name. If matchedBook is present, that catalog record is the book. Use its author, year, and catalogDescription. If catalogDescription is empty, recall the plot of that exact author only. If the reader names a book and also says which part they want, return mode list and recommend only that part. If they name a book and nothing else, return mode similar: summary is the plot of this author only, and groups are the ingredients of that plot. Each label starts with "If you want". Four groups, four real books. If they do not name a book, return mode list with 12 books of any year. Return JSON {"mode":"similar","source":{"title":"","author":"","summary":""},"groups":[{"label":"If you want ...","books":[{"title":"","author":"","why":""}]}]} or {"mode":"list","note":"one sentence","books":[{"title":"","author":"","why":""}]}. Never invent a title.`
+      : `Decide how to answer. If the reader names a book and does not already say which part they want, use mode similar. Use their exact title and author. Heartless by R.C. Martin is not Heartless by Marissa Meyer or Elsie Silver. summary must say what actually happens in that book. groups must be the specific ingredients of that book, each label starting with "If you want". Four groups, four books each. Do not use a vague label like "romance with a captivating narrative". If they name a book and also say what they want from it, use mode list and recommend only that ingredient. If they do not name a book, use mode list. Any publication year is allowed. Return JSON {"mode":"similar","source":{"title":"","author":"","summary":""},"groups":[{"label":"If you want ...","books":[{"title":"","author":"","why":""}]}]} or {"mode":"list","note":"one sentence","books":[{"title":"","author":"","why":""}]} with 12 books. Never invent a title.`
 
-  const data = asRecord(
-    await askModel(followUp, JSON.stringify({ ...input, matchedBook: matchedNote }), {
-      timeoutMs: 10000,
-      temperature: 0.2,
-    }),
-  )
+  const data = asRecord(await askModel(followUp, JSON.stringify(input)))
   if (!data) return null
-  const named = matched ? { title: matched.title, author: matched.authors[0] || '' } : undefined
-  const similar = parseSimilar(data, named)
-  if (similar) return similar
   if (data.mode === 'similar') {
     const source = asRecord(data.source)
-    const title = (typeof source?.title === 'string' && source.title.trim()) || named?.title || ''
-    const author = (typeof source?.author === 'string' && source.author.trim()) || named?.author || ''
-    const retry = asRecord(
-      await askModel(
-        `The last answer described the wrong novel. ${title} by ${author} is not Marissa Meyer's Wonderland book, not Elsie Silver's book, and not Kat Martin's book. summary must be this author's plot only. If you are not sure, set summary to the catalogDescription and still build groups from that plot, not from a fantasy retelling. Return the same JSON shape.`,
-        JSON.stringify({ ...input, matchedBook: matchedNote, rejected: source?.summary }),
-        { timeoutMs: 8000, temperature: 0.1 },
-      ),
-    )
-    const second = parseSimilar(retry, named)
-    if (second) return second
-    if (title && author) {
-      return {
-        mode: 'similar',
-        source: {
-          title,
-          author,
-          summary: matched?.description
-            ? clip(matched.description, 320)
-            : `This is ${title} by ${author}. A different novel shares the title, so name the part you want and Folio will search for that.`,
-        },
-        groups: [],
-      }
-    }
-    return null
+    const title = typeof source?.title === 'string' ? source.title.trim() : ''
+    const author = typeof source?.author === 'string' ? source.author.trim() : ''
+    const summary = typeof source?.summary === 'string' ? clip(source.summary, 320) : ''
+    const groups = Array.isArray(data.groups)
+      ? data.groups.flatMap((item) => {
+          const record = asRecord(item)
+          const label = typeof record?.label === 'string' ? record.label.trim() : ''
+          const picks = parsePicks(record?.books, 4)
+          return label && picks.length ? [{ label, picks }] : []
+        })
+      : []
+    if (!title || !author || !summary || groups.length === 0) return null
+    return { mode: 'similar', source: { title, author, summary }, groups: groups.slice(0, 4) }
   }
   const picks = parsePicks(data.books, 12)
   if (picks.length === 0) return null
@@ -537,35 +473,13 @@ async function planRequest(input: SearchInput, matched?: Candidate | null): Prom
   return { mode: 'list', note, picks }
 }
 
-function authorMatches(authors: string[], wantedAuthor: string): boolean {
-  const wantedLast = normalize(lastName(wantedAuthor))
-  if (wantedLast.length < 3) return false
-  const wantedInitials = wantedAuthor
-    .split(/\s+/)
-    .slice(0, -1)
-    .map((part) => normalize(part).replace(/[^a-z]/g, ''))
-    .join('')
-  return authors.some((name) => {
-    const parts = name.split(/\s+/).filter(Boolean)
-    const last = normalize(parts[parts.length - 1] ?? '')
-    if (last !== wantedLast) return false
-    if (wantedInitials.length < 2) return true
-    const initials = parts
-      .slice(0, -1)
-      .map((part) => normalize(part).replace(/[^a-z]/g, ''))
-      .join('')
-    return initials === wantedInitials
-  })
-}
-
-function pickMatch(found: Candidate[], title: string, author: string): Candidate | null {
+function pickMatch(found: Candidate[], title: string, authorBit: string): Candidate | null {
   const titleHits = found.filter((book) => titlesMatch(title, book.title))
-  const pool = author ? titleHits.filter((book) => authorMatches(book.authors, author)) : titleHits
-  pool.sort((a, b) => {
-    const described = Number(b.description.length > 80) - Number(a.description.length > 80)
-    if (described) return described
-    return (b.year ?? 0) - (a.year ?? 0)
-  })
+  const authorHits = authorBit
+    ? titleHits.filter((book) => book.authors.some((name) => normalize(name).includes(normalize(authorBit))))
+    : []
+  const pool = authorBit ? authorHits : titleHits
+  pool.sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
   return pool[0] ?? null
 }
 
@@ -573,63 +487,12 @@ async function lookupTitle(title: string, author: string): Promise<Candidate | n
   const authorBit = lastName(author)
   const safeTitle = title.replace(/[&]/g, ' ')
   const googleQuery = authorBit ? `intitle:${safeTitle} inauthor:${authorBit}` : `intitle:${safeTitle}`
-  const libraryQuery = author ? `${safeTitle} ${author}` : safeTitle
+  const libraryQuery = authorBit ? `${safeTitle} ${authorBit}` : safeTitle
   const [google, library] = await Promise.all([
-    searchGoogle(googleQuery, 8),
-    searchOpenLibrary(libraryQuery, 8),
+    searchGoogle(googleQuery, 5),
+    searchOpenLibrary(libraryQuery, 5),
   ])
-  return pickMatch([...google, ...library], title, author)
-}
-
-async function longerDescription(book: Candidate): Promise<string> {
-  if (book.description.length >= 80 && book.id.startsWith('gb:')) return book.description
-  if (book.id.startsWith('gb:')) {
-    const params = new URLSearchParams()
-    const key = readEnv('GOOGLE_BOOKS_API_KEY')
-    if (key) params.set('key', key)
-    const data = asRecord(await fetchJson(`https://www.googleapis.com/books/v1/volumes/${book.id.slice(3)}?${params}`))
-    const info = asRecord(data?.volumeInfo)
-    const text = typeof info?.description === 'string' ? plain(info.description) : ''
-    if (text.length > book.description.length) return clip(text, 900)
-  }
-  if (book.id.startsWith('ol:') && book.description.length < 80) {
-    const data = asRecord(await fetchJson(`https://openlibrary.org${book.id.slice(3)}.json`))
-    const description = data?.description
-    const text =
-      typeof description === 'string'
-        ? description
-        : typeof asRecord(description)?.value === 'string'
-          ? (asRecord(description)?.value as string)
-          : ''
-    if (text) return clip(plain(text), 900)
-  }
-  return book.description
-}
-
-async function describeSource(title: string, author: string): Promise<Candidate | null> {
-  const match = await lookupTitle(title, author)
-  if (!match) return null
-  match.description = await longerDescription(match)
-  return match
-}
-
-function extractNamedBook(query: string): { title: string; author: string } | null {
-  const match = query.match(/\b(?:similar to|like)\s+["“']?(.+?)["”']?\s+by\s+(.+)$/i)
-  if (!match) return null
-  const title = match[1]?.trim() ?? ''
-  const author = (match[2] ?? '')
-    .split(/\b(?:i|and|because|with|where|who|that|about)\b/i)[0]
-    ?.replace(/[.,!;:]+$/, '')
-    .trim()
-  if (title.length < 2 || !author || author.length < 2) return null
-  return { title, author }
-}
-
-const OTHER_HEARTLESS = /\b(wonderland|queen of hearts|jester|jest|catherine|marissa meyer|chestnut springs|kingdom of hearts)\b/i
-
-function describesAnotherBook(text: string, author: string): boolean {
-  if (!OTHER_HEARTLESS.test(text)) return false
-  return !OTHER_HEARTLESS.test(author)
+  return pickMatch([...google, ...library], title, authorBit)
 }
 
 async function recentFromCatalog(input: SearchInput): Promise<Candidate[]> {
@@ -664,9 +527,7 @@ async function findBooks(input: SearchInput): Promise<{
   note: string
   usedAi: boolean
 }> {
-  const hinted = input.facet || input.exclude.length > 0 ? null : extractNamedBook(input.query)
-  const hintedMatch = hinted ? await describeSource(hinted.title, hinted.author) : null
-  const plan = await planRequest(input, hintedMatch)
+  const plan = await planRequest(input)
   if (!plan) {
     const extras = (await recentFromCatalog(input)).filter(
       (book) => !input.exclude.some((title) => titlesMatch(title, book.title)),
@@ -694,12 +555,8 @@ async function findBooks(input: SearchInput): Promise<{
     }
   }
 
-  const sameHint =
-    hintedMatch &&
-    titlesMatch(plan.source.title, hintedMatch.title) &&
-    authorMatches(hintedMatch.authors, plan.source.author)
   const [sourceMatch, verifiedGroups] = await Promise.all([
-    sameHint ? Promise.resolve(hintedMatch) : lookupTitle(plan.source.title, plan.source.author),
+    lookupTitle(plan.source.title, plan.source.author),
     Promise.all(
       plan.groups.map(async (group, index) => ({
         id: `${normalize(group.label).slice(0, 60) || 'angle'}-${index}`,
@@ -789,7 +646,6 @@ export async function handleRecommend(request: Request): Promise<Response> {
     facet: typeof record.facet === 'string' ? record.facet.trim().slice(0, 180) : '',
     sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle.trim().slice(0, 180) : '',
     sourceAuthor: typeof record.sourceAuthor === 'string' ? record.sourceAuthor.trim().slice(0, 120) : '',
-    sourceSummary: typeof record.sourceSummary === 'string' ? record.sourceSummary.trim().slice(0, 400) : '',
   }
 
   if (!input.query && input.genres.length + input.tropes.length + input.movies.length === 0) {
