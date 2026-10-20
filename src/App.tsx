@@ -144,6 +144,7 @@ export default function App() {
           facet: group?.label ?? '',
           sourceTitle: sourceBook?.title ?? '',
           sourceAuthor: sourceBook?.authors[0] ?? '',
+          sourceSummary: sourceBook?.summary ?? '',
         }),
       )
       if (!data) return
