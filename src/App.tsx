@@ -35,7 +35,7 @@ export default function App() {
   const [groups, setGroups] = useState<BookGroup[]>([])
   const [sourceBook, setSourceBook] = useState<SourceBook | null>(null)
   const [visible, setVisible] = useState(PAGE)
-  const [note, setNote] = useState('')
+  const [reading, setReading] = useState('')
   const [error, setError] = useState('')
   const [canLoadMore, setCanLoadMore] = useState(true)
   const [exhaustedGroups, setExhaustedGroups] = useState<Record<string, boolean>>({})
@@ -93,6 +93,7 @@ export default function App() {
     setBooks([])
     setGroups([])
     setSourceBook(null)
+    setReading('')
     setVisible(PAGE)
     setCanLoadMore(true)
     setExhaustedGroups({})
@@ -109,7 +110,7 @@ export default function App() {
       setBooks(nextBooks)
       setGroups(nextGroups)
       setSourceBook(data.sourceBook ?? null)
-      setNote(data.note ?? '')
+      setReading(data.reading || data.note || '')
       setVisible(PAGE)
       setCanLoadMore(true)
       setPhase('ready')
@@ -144,6 +145,7 @@ export default function App() {
           facet: group?.label ?? '',
           sourceTitle: sourceBook?.title ?? '',
           sourceAuthor: sourceBook?.authors[0] ?? '',
+          sourceSummary: sourceBook?.summary || reading,
         }),
       )
       if (!data) return
@@ -191,7 +193,7 @@ export default function App() {
     setGroups([])
     setSourceBook(null)
     setVisible(PAGE)
-    setNote('')
+    setReading('')
     setError('')
     setCanLoadMore(true)
     setExhaustedGroups({})
@@ -286,6 +288,7 @@ export default function App() {
               </div>
             ) : (
               <>
+                {reading && <p className="reading">{reading}</p>}
                 {sourceBook && (
                   <article className="source">
                     <Cover
@@ -295,7 +298,7 @@ export default function App() {
                       onBroken={() => setBrokenCovers((current) => ({ ...current, [sourceBook.title]: true }))}
                     />
                     <div>
-                      <p className="eyebrow">This is the book</p>
+                      <p className="eyebrow">This is the one you named</p>
                       <h2>
                         <a href={sourceBook.infoUrl} target="_blank" rel="noreferrer">
                           {sourceBook.title}
@@ -355,7 +358,6 @@ export default function App() {
                 ))}
                 {books.length > 0 && (
                   <>
-                    {note && !sourceBook && <h2>{note}</h2>}
                     <BookList
                       books={books.slice(0, visible)}
                       brokenCovers={brokenCovers}

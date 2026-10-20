@@ -38,6 +38,7 @@ export type RecommendResponse = {
   groups?: BookGroup[]
   sourceBook?: SourceBook
   note: string
+  reading?: string
   usedAi: boolean
   error?: string
 }

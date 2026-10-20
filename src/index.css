@@ -222,6 +222,13 @@ textarea::placeholder {
   scroll-margin-top: 20px;
 }
 
+.reading {
+  margin: 0 0 22px;
+  max-width: 68ch;
+  font-size: 18px;
+  line-height: 1.55;
+}
+
 .matches h2,
 .source h2 {
   margin: 0 0 8px;

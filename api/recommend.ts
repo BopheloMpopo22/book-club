@@ -36,6 +36,7 @@ type SearchInput = {
   facet: string
   sourceTitle: string
   sourceAuthor: string
+  sourceSummary: string
 }
 
 type Candidate = BookMatch & { editions: number }
@@ -364,7 +365,7 @@ async function askModel(system: string, user: string): Promise<unknown> {
   const key = readEnv('OPENAI_API_KEY')
   if (!key) return null
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 12000)
+  const timer = setTimeout(() => controller.abort(), 18000)
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -374,8 +375,9 @@ async function askModel(system: string, user: string): Promise<unknown> {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: readEnv('OPENAI_MODEL') || 'gpt-4o-mini',
-        temperature: 0.4,
+        model: readEnv('OPENAI_MODEL') || 'gpt-4o',
+        temperature: 0.3,
+        max_tokens: 1800,
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: system },
@@ -417,11 +419,14 @@ function titlesMatch(wanted: string, found: string): boolean {
 
 type TitlePick = { title: string; author: string; why: string }
 
+type NamedWork = { title: string; author: string; summary: string }
+
 type Plan =
-  | { mode: 'list'; note: string; picks: TitlePick[] }
+  | { mode: 'list'; reading: string; picks: TitlePick[]; source?: NamedWork }
   | {
       mode: 'similar'
-      source: { title: string; author: string; summary: string }
+      reading: string
+      source: NamedWork
       groups: { label: string; picks: TitlePick[] }[]
     }
 
@@ -442,35 +447,64 @@ function newestFirst(books: Candidate[]): Candidate[] {
   return books.slice().sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
 }
 
+function parseNamed(value: unknown): NamedWork | null {
+  const source = asRecord(value)
+  const title = typeof source?.title === 'string' ? source.title.trim() : ''
+  const author = typeof source?.author === 'string' ? source.author.trim() : ''
+  const summary = typeof source?.summary === 'string' ? clip(source.summary, 560) : ''
+  if (!title || !author || !summary) return null
+  return { title, author, summary }
+}
+
+function parseReading(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() ? clip(value.trim(), 700) : fallback
+}
+
 async function planRequest(input: SearchInput): Promise<Plan | null> {
   const followUp = input.facet
-    ? `The reader confirmed ${input.sourceTitle} by ${input.sourceAuthor}. They want more books only for this angle: ${input.facet}. Do not repeat: ${input.exclude.join('; ') || 'none'}. Return JSON {"mode":"list","note":"${input.facet}","books":[{"title":"","author":"","why":""}]} with 8 real books.`
+    ? `The reader already named ${input.sourceTitle} by ${input.sourceAuthor}. What that work is: ${input.sourceSummary || 'use only this work'}. They want more books only for this ingredient: ${input.facet}. Stay on that ingredient. Do not repeat: ${input.exclude.join('; ') || 'none'}. Return JSON {"reading":"one sentence","mode":"list","books":[{"title":"","author":"","why":""}]} with 8 real books.`
     : input.exclude.length > 0
-      ? `Give 12 more real novels for this request. Any publication year. Do not repeat: ${input.exclude.join('; ')}. Return JSON {"mode":"list","note":"one sentence","books":[{"title":"","author":"","why":""}]}.`
-      : `Decide how to answer. If the reader names a book and does not already say which part they want, use mode similar. Use their exact title and author. Heartless by R.C. Martin is not Heartless by Marissa Meyer or Elsie Silver. summary must say what actually happens in that book. groups must be the specific ingredients of that book, each label starting with "If you want". Four groups, four books each. Do not use a vague label like "romance with a captivating narrative". If they name a book and also say what they want from it, use mode list and recommend only that ingredient. If they do not name a book, use mode list. Any publication year is allowed. Return JSON {"mode":"similar","source":{"title":"","author":"","summary":""},"groups":[{"label":"If you want ...","books":[{"title":"","author":"","why":""}]}]} or {"mode":"list","note":"one sentence","books":[{"title":"","author":"","why":""}]} with 12 books. Never invent a title.`
+      ? `Give 8 more real novels for the same request. Any publication year. Do not repeat: ${input.exclude.join('; ')}. Return JSON {"reading":"one sentence","mode":"list","books":[{"title":"","author":"","why":""}]}.`
+      : `You recommend books the way a careful conversation would. Understand the request before you name anything. Return JSON only.
+
+reading: 2 to 4 sentences spoken to the reader. Restate what they asked and what it implies. If they named a book and a reason, say how that reason shows up in the book, then what kind of book that means they want.
+
+Use mode "similar" when they name a book or a movie and do not say which part they want. source must be the work they named. Do not swap it for a more famous work with the same title. summary says what actually happens: the people, the situation, and the real ingredients. groups are those ingredients, four of them. Each label starts with "If you want" and states one ingredient. Three real books in each group. why names that shared ingredient.
+
+Use mode "focused" when they name a book or a movie and also say what they like about it. source is that work. summary explains that exact trait in the work. books are eight novels that share the trait. why ties each book to the trait they named.
+
+Use mode "list" when they do not name a specific work. books are eight novels. why ties each one to the reading.
+
+For a movie, author is the director. Any publication year. Never invent a title or author.
+
+{"reading":"","mode":"similar","source":{"title":"","author":"","summary":""},"groups":[{"label":"If you want ...","books":[{"title":"","author":"","why":""}]}]}
+{"reading":"","mode":"focused","source":{"title":"","author":"","summary":""},"books":[{"title":"","author":"","why":""}]}
+{"reading":"","mode":"list","books":[{"title":"","author":"","why":""}]}`
 
   const data = asRecord(await askModel(followUp, JSON.stringify(input)))
   if (!data) return null
-  if (data.mode === 'similar') {
-    const source = asRecord(data.source)
-    const title = typeof source?.title === 'string' ? source.title.trim() : ''
-    const author = typeof source?.author === 'string' ? source.author.trim() : ''
-    const summary = typeof source?.summary === 'string' ? clip(source.summary, 320) : ''
+  const named = parseNamed(data.source)
+  if (data.mode === 'similar' && named) {
     const groups = Array.isArray(data.groups)
       ? data.groups.flatMap((item) => {
           const record = asRecord(item)
           const label = typeof record?.label === 'string' ? record.label.trim() : ''
-          const picks = parsePicks(record?.books, 4)
+          const picks = parsePicks(record?.books, 3)
           return label && picks.length ? [{ label, picks }] : []
         })
       : []
-    if (!title || !author || !summary || groups.length === 0) return null
-    return { mode: 'similar', source: { title, author, summary }, groups: groups.slice(0, 4) }
+    if (groups.length > 0) {
+      return { mode: 'similar', reading: parseReading(data.reading, named.summary), source: named, groups: groups.slice(0, 4) }
+    }
   }
-  const picks = parsePicks(data.books, 12)
+  if ((data.mode === 'focused' || data.mode === 'similar') && named) {
+    const picks = parsePicks(data.books, 8)
+    if (picks.length > 0) return { mode: 'list', reading: parseReading(data.reading, named.summary), picks, source: named }
+  }
+  const picks = parsePicks(data.books, 8)
   if (picks.length === 0) return null
-  const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : synthesizeNote(input)
-  return { mode: 'list', note, picks }
+  const reading = parseReading(data.reading, synthesizeNote(input))
+  return { mode: 'list', reading, picks }
 }
 
 function pickMatch(found: Candidate[], title: string, authorBit: string): Candidate | null {
@@ -520,11 +554,26 @@ async function verifyPicks(picks: TitlePick[], exclude: string[]): Promise<Candi
   return newestFirst(dedupe(books))
 }
 
+async function sourceCard(source: NamedWork): Promise<SourceBook> {
+  const match = await lookupTitle(source.title, source.author)
+  return {
+    title: match?.title || source.title,
+    authors: match?.authors.length ? match.authors : [source.author],
+    year: match?.year ?? null,
+    coverUrl: match?.coverUrl ?? null,
+    infoUrl:
+      match?.infoUrl ||
+      `https://openlibrary.org/search?q=${encodeURIComponent(`${source.title} ${source.author}`)}`,
+    summary: source.summary,
+  }
+}
+
 async function findBooks(input: SearchInput): Promise<{
   books: BookMatch[]
   groups: BookGroup[]
   sourceBook?: SourceBook
   note: string
+  reading: string
   usedAi: boolean
 }> {
   const plan = await planRequest(input)
@@ -532,31 +581,27 @@ async function findBooks(input: SearchInput): Promise<{
     const extras = (await recentFromCatalog(input)).filter(
       (book) => !input.exclude.some((title) => titlesMatch(title, book.title)),
     )
-    return { books: extras.slice(0, 24).map(publish), groups: [], note: synthesizeNote(input), usedAi: false }
+    const note = synthesizeNote(input)
+    return { books: extras.slice(0, 24).map(publish), groups: [], note, reading: note, usedAi: false }
   }
 
   if (plan.mode === 'list') {
-    let books = await verifyPicks(plan.picks, input.exclude)
-    if (books.length < 8 && input.exclude.length === 0 && !input.facet) {
-      const seen = new Set(books.map((book) => normalize(book.title)))
-      for (const book of await recentFromCatalog(input)) {
-        if (books.length >= 24) break
-        if (seen.has(normalize(book.title))) continue
-        books.push(book)
-        seen.add(normalize(book.title))
-      }
-      books = newestFirst(books)
-    }
+    const [books, sourceBook] = await Promise.all([
+      verifyPicks(plan.picks, input.exclude),
+      plan.source ? sourceCard(plan.source) : Promise.resolve(undefined),
+    ])
     return {
       books: books.filter((book) => book.title && book.why).slice(0, 24).map(publish),
       groups: [],
-      note: plan.note,
+      sourceBook,
+      note: plan.reading,
+      reading: plan.reading,
       usedAi: true,
     }
   }
 
-  const [sourceMatch, verifiedGroups] = await Promise.all([
-    lookupTitle(plan.source.title, plan.source.author),
+  const [sourceBook, verifiedGroups] = await Promise.all([
+    sourceCard(plan.source),
     Promise.all(
       plan.groups.map(async (group, index) => ({
         id: `${normalize(group.label).slice(0, 60) || 'angle'}-${index}`,
@@ -569,15 +614,9 @@ async function findBooks(input: SearchInput): Promise<{
   return {
     books: [],
     groups: verifiedGroups.filter((group) => group.books.length > 0),
-    sourceBook: {
-      title: sourceMatch?.title || plan.source.title,
-      authors: sourceMatch?.authors.length ? sourceMatch.authors : [plan.source.author],
-      year: sourceMatch?.year ?? null,
-      coverUrl: sourceMatch?.coverUrl ?? null,
-      infoUrl: sourceMatch?.infoUrl || `https://openlibrary.org/search?q=${encodeURIComponent(`${plan.source.title} ${plan.source.author}`)}`,
-      summary: plan.source.summary,
-    },
-    note: plan.source.summary,
+    sourceBook,
+    note: plan.reading,
+    reading: plan.reading,
     usedAi: true,
   }
 }
@@ -646,6 +685,7 @@ export async function handleRecommend(request: Request): Promise<Response> {
     facet: typeof record.facet === 'string' ? record.facet.trim().slice(0, 180) : '',
     sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle.trim().slice(0, 180) : '',
     sourceAuthor: typeof record.sourceAuthor === 'string' ? record.sourceAuthor.trim().slice(0, 120) : '',
+    sourceSummary: typeof record.sourceSummary === 'string' ? record.sourceSummary.trim().slice(0, 700) : '',
   }
 
   if (!input.query && input.genres.length + input.tropes.length + input.movies.length === 0) {
