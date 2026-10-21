@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import Community from './community/Community.tsx'
 import { genres, movies, searchHints, siteLine, siteName, tropes } from './data/discover.ts'
 import { shelf } from './data/shelf.ts'
 import type { BookGroup, BookMatch, RecommendResponse, ShelfBook, SourceBook } from './types.ts'
@@ -46,8 +47,22 @@ export default function App() {
   const [openMenu, setOpenMenu] = useState<'genre' | 'trope' | 'movie' | null>(null)
   const [hintIndex, setHintIndex] = useState(0)
   const [hintOn, setHintOn] = useState(true)
+  const [area, setArea] = useState<'search' | 'community'>(() =>
+    window.location.hash.startsWith('#community') || window.location.hash.startsWith('#profile') ? 'community' : 'search',
+  )
   const busy = useRef(false)
   const bar = useRef<HTMLFormElement>(null)
+
+  useEffect(() => {
+    const sync = () =>
+      setArea(
+        window.location.hash.startsWith('#community') || window.location.hash.startsWith('#profile')
+          ? 'community'
+          : 'search',
+      )
+    window.addEventListener('hashchange', sync)
+    return () => window.removeEventListener('hashchange', sync)
+  }, [])
 
   useEffect(() => {
     function onPointer(event: MouseEvent) {
@@ -234,12 +249,35 @@ export default function App() {
   return (
     <div className="page">
       <header className="top">
-        <button type="button" className="mark" onClick={reset}>
+        <button
+          type="button"
+          className="mark"
+          onClick={() => {
+            if (window.location.hash) window.location.hash = ''
+            reset()
+          }}
+        >
           {siteName}
         </button>
-        <p className="line">{siteLine}</p>
+        <p className="line">{area === 'community' ? 'One conversation for book lovers.' : siteLine}</p>
+        <nav className="nav" aria-label="Site">
+          <button type="button" className="nav-link" aria-current={area === 'search' ? 'page' : undefined} onClick={() => {
+            if (window.location.hash) window.location.hash = ''
+          }}>
+            Search
+          </button>
+          <button type="button" className="nav-link" aria-current={area === 'community' ? 'page' : undefined} onClick={() => {
+            window.location.hash = 'community'
+          }}>
+            Community
+          </button>
+        </nav>
       </header>
 
+      {area === 'community' ? (
+        <Community />
+      ) : (
+      <>
       <main className="stage">
         <form className="search" onSubmit={onSubmit} ref={bar}>
           <div className="search-row">
@@ -475,6 +513,8 @@ export default function App() {
       <p className="fine">
         Covers and titles come from Open Library and Google Books. Booksrec recommends the book. It does not host the file.
       </p>
+      </>
+      )}
     </div>
   )
 }
