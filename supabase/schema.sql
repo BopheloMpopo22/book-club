@@ -1,5 +1,5 @@
 -- Run this once in the Supabase SQL editor.
--- Folio does not store every book. It keeps the ones it has already recommended,
+-- Booksrec does not store every book. It keeps the ones it has already recommended,
 -- plus each search, so repeat visits and the shelf can get faster later.
 -- The API uses the service role key, which bypasses these policies.
 

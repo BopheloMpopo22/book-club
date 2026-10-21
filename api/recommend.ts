@@ -41,7 +41,7 @@ type SearchInput = {
 
 type Candidate = BookMatch & { editions: number }
 
-const USER_AGENT = 'FolioBookFinder/0.1 (book recommendation site)'
+const USER_AGENT = 'Booksrec/0.1 (book recommendation site)'
 const THIS_YEAR = new Date().getFullYear()
 
 const TROPE_QUERIES: Record<string, string> = {
@@ -666,7 +666,7 @@ async function cacheResult(books: BookMatch[], input: SearchInput): Promise<void
 
 export async function handleRecommend(request: Request): Promise<Response> {
   if (request.method !== 'POST') return json({ error: 'Use POST.' }, 405)
-  if (limited(request)) return json({ error: 'Folio needs a short break. Try again in a few minutes.' }, 429)
+  if (limited(request)) return json({ error: 'Booksrec needs a short break. Try again in a few minutes.' }, 429)
 
   let body: unknown
   try {
@@ -689,7 +689,7 @@ export async function handleRecommend(request: Request): Promise<Response> {
   }
 
   if (!input.query && input.genres.length + input.tropes.length + input.movies.length === 0) {
-    return json({ error: 'Tell Folio what you loved.' }, 400)
+    return json({ error: 'Tell Booksrec what you loved.' }, 400)
   }
 
   try {

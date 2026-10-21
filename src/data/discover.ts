@@ -1,6 +1,6 @@
-export const siteName = 'Folio'
+export const siteName = 'Booksrec'
 
-export const siteLine = 'Tell it the specific thing you loved.'
+export const siteLine = 'Book recommendations for book lovers.'
 
 export const genres = [
   'Fiction',

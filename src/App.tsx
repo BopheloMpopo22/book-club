@@ -66,7 +66,7 @@ export default function App() {
         setHintIndex((current) => (current + 1) % searchHints.length)
         setHintOn(true)
       }, 280)
-    }, 1800)
+    }, 3600)
     return () => {
       window.clearInterval(id)
       window.clearTimeout(fade)
@@ -150,7 +150,7 @@ export default function App() {
       })
     } catch {
       setPhase('ready')
-      setError('Folio could not reach the catalogs. Try again in a moment.')
+      setError('Booksrec could not reach the catalogs. Try again in a moment.')
     } finally {
       busy.current = false
     }
@@ -193,7 +193,7 @@ export default function App() {
         )
       }
     } catch {
-      setError('Folio could not reach the catalogs. Try again in a moment.')
+      setError('Booksrec could not reach the catalogs. Try again in a moment.')
     } finally {
       setLoadingMore('')
       busy.current = false
@@ -438,7 +438,7 @@ export default function App() {
                   </>
                 )}
                 {sourceBook && groups.length === 0 && books.length === 0 && (
-                  <p className="meta">Name the part you want, like the affair or the age gap, and Folio will look for that.</p>
+                  <p className="meta">Name the part you want, like the affair or the age gap, and Booksrec will look for that.</p>
                 )}
               </>
             )}
@@ -473,7 +473,7 @@ export default function App() {
       </section>
 
       <p className="fine">
-        Covers and titles come from Open Library and Google Books. Folio recommends the book. It does not host the file.
+        Covers and titles come from Open Library and Google Books. Booksrec recommends the book. It does not host the file.
       </p>
     </div>
   )
