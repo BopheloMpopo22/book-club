@@ -106,7 +106,7 @@ export default function App() {
         return
       }
       const nextBooks = newest(data.books ?? [])
-      const nextGroups = data.groups ?? []
+      const nextGroups = (data.groups ?? []).map((group) => ({ ...group, books: newest(group.books) }))
       setBooks(nextBooks)
       setGroups(nextGroups)
       setSourceBook(data.sourceBook ?? null)

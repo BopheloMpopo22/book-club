@@ -462,9 +462,9 @@ function parseReading(value: unknown, fallback: string): string {
 
 async function planRequest(input: SearchInput): Promise<Plan | null> {
   const followUp = input.facet
-    ? `The reader already named ${input.sourceTitle} by ${input.sourceAuthor}. What that work is: ${input.sourceSummary || 'use only this work'}. They want more books only for this ingredient: ${input.facet}. Stay on that ingredient. Do not repeat: ${input.exclude.join('; ') || 'none'}. Return JSON {"reading":"one sentence","mode":"list","books":[{"title":"","author":"","why":""}]} with 8 real books.`
+    ? `The reader already named ${input.sourceTitle} by ${input.sourceAuthor}. What that work is: ${input.sourceSummary || 'use only this work'}. They want more books only for this ingredient: ${input.facet}. Stay on that ingredient. Include a newer book when it truly fits, and keep older true matches too. Do not repeat: ${input.exclude.join('; ') || 'none'}. Return JSON {"reading":"one sentence","mode":"list","books":[{"title":"","author":"","why":""}]} with 8 real books.`
     : input.exclude.length > 0
-      ? `Give 8 more real novels for the same request. Any publication year. Do not repeat: ${input.exclude.join('; ')}. Return JSON {"reading":"one sentence","mode":"list","books":[{"title":"","author":"","why":""}]}.`
+      ? `Give 8 more real novels for the same request. Include a newer book when it truly fits, and keep older true matches too. Do not repeat: ${input.exclude.join('; ')}. Return JSON {"reading":"one sentence","mode":"list","books":[{"title":"","author":"","why":""}]}.`
       : `You recommend books the way a careful conversation would. Understand the request before you name anything. Return JSON only.
 
 reading: 2 to 4 sentences spoken to the reader. Restate what they asked and what it implies. If they named a book and a reason, say how that reason shows up in the book, then what kind of book that means they want.
@@ -475,7 +475,7 @@ Use mode "focused" when they name a book or a movie and also say what they like 
 
 Use mode "list" when they do not name a specific work. books are eight novels. why ties each one to the reading.
 
-For a movie, author is the director. Any publication year. Never invent a title or author.
+For a movie, author is the director. Never invent a title or author. Do not stay in the decade of the book or movie they named. When a newer novel is a real match, include it. An older novel that is a true match stays too. If every true match is old, name those.
 
 {"reading":"","mode":"similar","source":{"title":"","author":"","summary":""},"groups":[{"label":"If you want ...","books":[{"title":"","author":"","why":""}]}]}
 {"reading":"","mode":"focused","source":{"title":"","author":"","summary":""},"books":[{"title":"","author":"","why":""}]}
