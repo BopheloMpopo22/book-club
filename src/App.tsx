@@ -1,5 +1,5 @@
-import { useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { genres, movies, siteLine, siteName, tropes } from './data/discover.ts'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { genres, movies, searchHints, siteLine, siteName, tropes } from './data/discover.ts'
 import { shelf } from './data/shelf.ts'
 import type { BookGroup, BookMatch, RecommendResponse, ShelfBook, SourceBook } from './types.ts'
 
@@ -43,7 +43,35 @@ export default function App() {
   const [correcting, setCorrecting] = useState(false)
   const [correction, setCorrection] = useState('')
   const [brokenCovers, setBrokenCovers] = useState<Record<string, boolean>>({})
+  const [openMenu, setOpenMenu] = useState<'genre' | 'trope' | 'movie' | null>(null)
+  const [hintIndex, setHintIndex] = useState(0)
+  const [hintOn, setHintOn] = useState(true)
   const busy = useRef(false)
+  const bar = useRef<HTMLFormElement>(null)
+
+  useEffect(() => {
+    function onPointer(event: MouseEvent) {
+      if (!bar.current?.contains(event.target as Node)) setOpenMenu(null)
+    }
+    document.addEventListener('mousedown', onPointer)
+    return () => document.removeEventListener('mousedown', onPointer)
+  }, [])
+
+  useEffect(() => {
+    if (query.trim()) return
+    let fade = 0
+    const id = window.setInterval(() => {
+      setHintOn(false)
+      fade = window.setTimeout(() => {
+        setHintIndex((current) => (current + 1) % searchHints.length)
+        setHintOn(true)
+      }, 280)
+    }, 1800)
+    return () => {
+      window.clearInterval(id)
+      window.clearTimeout(fade)
+    }
+  }, [query])
 
   const tags = [
     ...pickedGenres.map((label) => ({ label, group: 'genre' as const })),
@@ -213,70 +241,104 @@ export default function App() {
       </header>
 
       <main className="stage">
-        <form className="search" onSubmit={onSubmit}>
-          <div className="search-main">
-            {tags.length > 0 && (
-              <div className="tags">
-                {tags.map((tag) => (
-                  <button
-                    key={`${tag.group}-${tag.label}`}
-                    type="button"
-                    className="tag"
-                    onClick={() => removeTag(tag.group, tag.label)}
-                  >
-                    {tag.label} <span aria-hidden="true">×</span>
-                    <span className="sr-only">Remove {tag.label}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <label className="sr-only" htmlFor="ask">
-              Describe the book you want
-            </label>
-            <textarea
-              id="ask"
-              rows={1}
-              value={query}
-              placeholder="A realistic hero, a job that drives the story, a rainy campus, a movie it felt like…"
-              onChange={(event) => {
-                const el = event.currentTarget
-                el.style.height = 'auto'
-                el.style.height = `${Math.min(el.scrollHeight, 160)}px`
-                setQuery(el.value)
-              }}
-              onKeyDown={onKeyDown}
-            />
+        <form className="search" onSubmit={onSubmit} ref={bar}>
+          <div className="search-row">
+            <div className="search-main">
+              {tags.length > 0 && (
+                <div className="tags">
+                  {tags.map((tag) => (
+                    <button
+                      key={`${tag.group}-${tag.label}`}
+                      type="button"
+                      className="tag"
+                      onClick={() => removeTag(tag.group, tag.label)}
+                    >
+                      {tag.label} <span aria-hidden="true">×</span>
+                      <span className="sr-only">Remove {tag.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <label className="sr-only" htmlFor="ask">
+                Describe the book you want
+              </label>
+              <textarea
+                id="ask"
+                rows={2}
+                value={query}
+                placeholder="Tell it anything. A feeling, a job, a person, a book it felt like…"
+                onChange={(event) => {
+                  const el = event.currentTarget
+                  el.style.height = 'auto'
+                  el.style.height = `${Math.min(el.scrollHeight, 180)}px`
+                  setQuery(el.value)
+                }}
+                onKeyDown={onKeyDown}
+              />
+            </div>
+            <button className="send" type="submit" disabled={!canSearch || phase === 'loading' || Boolean(loadingMore)} aria-label="Find books">
+              {phase === 'loading' ? <span className="spinner" /> : <ArrowIcon />}
+            </button>
           </div>
-          <button className="send" type="submit" disabled={!canSearch || phase === 'loading' || Boolean(loadingMore)} aria-label="Find books">
-            {phase === 'loading' ? <span className="spinner" /> : <ArrowIcon />}
-          </button>
+          <div className="search-foot">
+            <div className="menus">
+              <MenuWord
+                label="Genre"
+                open={openMenu === 'genre'}
+                picked={pickedGenres.length}
+                onClick={() => setOpenMenu((current) => (current === 'genre' ? null : 'genre'))}
+              />
+              <MenuWord
+                label="Trope"
+                open={openMenu === 'trope'}
+                picked={pickedTropes.length}
+                onClick={() => setOpenMenu((current) => (current === 'trope' ? null : 'trope'))}
+              />
+              <MenuWord
+                label="Movie"
+                open={openMenu === 'movie'}
+                picked={pickedMovies.length}
+                onClick={() => setOpenMenu((current) => (current === 'movie' ? null : 'movie'))}
+              />
+            </div>
+            {!query.trim() && (
+              <p className="hint" aria-hidden="true">
+                <span className={hintOn ? 'hint-line' : 'hint-line off'}>{searchHints[hintIndex]}</span>
+              </p>
+            )}
+          </div>
+          {openMenu && (
+            <div className="menu-panel" role="group" aria-label={openMenu}>
+              {(openMenu === 'genre' ? genres : openMenu === 'trope' ? tropes : movies).map((option) => {
+                const selected =
+                  openMenu === 'genre'
+                    ? pickedGenres.includes(option)
+                    : openMenu === 'trope'
+                      ? pickedTropes.includes(option)
+                      : pickedMovies.includes(option)
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    className="choice"
+                    aria-pressed={selected}
+                    onClick={() => {
+                      if (openMenu === 'genre') setGenres((current) => toggle(current, option))
+                      if (openMenu === 'trope') setTropes((current) => toggle(current, option))
+                      if (openMenu === 'movie') setMovies((current) => toggle(current, option))
+                    }}
+                  >
+                    {option}
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </form>
 
         <p className="status" role="status">
           {phase === 'loading' ? 'Finding the closest books…' : error}
         </p>
-
-        <section className="filters" aria-label="Ways to describe a book">
-          <FilterGroup
-            label="Genres"
-            options={genres}
-            selected={pickedGenres}
-            onToggle={(value) => setGenres((current) => toggle(current, value))}
-          />
-          <FilterGroup
-            label="Tropes"
-            options={tropes}
-            selected={pickedTropes}
-            onToggle={(value) => setTropes((current) => toggle(current, value))}
-            columns
-          />
-          <FilterGroup
-            label="Movies"
-            options={movies}
-            selected={pickedMovies}
-            onToggle={(value) => setMovies((current) => toggle(current, value))}
-          />
-        </section>
 
         {phase !== 'idle' && (
           <section className="matches" id="matches" aria-live="polite">
@@ -417,39 +479,22 @@ export default function App() {
   )
 }
 
-function FilterGroup({
+function MenuWord({
   label,
-  options,
-  selected,
-  onToggle,
-  columns = false,
+  open,
+  picked,
+  onClick,
 }: {
   label: string
-  options: string[]
-  selected: string[]
-  onToggle: (value: string) => void
-  columns?: boolean
+  open: boolean
+  picked: number
+  onClick: () => void
 }) {
   return (
-    <div className="filter">
-      <h2 className="filter-label">{label}</h2>
-      <div className={columns ? 'choices columns' : 'choices'} role="group" aria-label={label}>
-        {options.map((option) => {
-          const pressed = selected.includes(option)
-          return (
-            <button
-              key={option}
-              type="button"
-              className="choice"
-              aria-pressed={pressed}
-              onClick={() => onToggle(option)}
-            >
-              {option}
-            </button>
-          )
-        })}
-      </div>
-    </div>
+    <button type="button" className={picked ? 'menu-word picked' : 'menu-word'} aria-expanded={open} onClick={onClick}>
+      {label}
+      {picked > 0 ? ` ${picked}` : ''}
+    </button>
   )
 }
 

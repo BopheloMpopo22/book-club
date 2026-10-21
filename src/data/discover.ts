@@ -3,20 +3,44 @@ export const siteName = 'Folio'
 export const siteLine = 'Tell it the specific thing you loved.'
 
 export const genres = [
+  'Fiction',
+  'Nonfiction',
   'Romance',
+  'Christian romance',
+  'Christian literature',
+  'Contemporary',
   'Romantasy',
   'Fantasy',
   'Dark romance',
-  'Contemporary',
   'Thriller',
   'Mystery',
+  'Crime',
   'Historical',
   'Science fiction',
   'Horror',
   'Young adult',
+  'New adult',
   'Sports romance',
+  "Women's fiction",
   'Literary',
+  'Classic',
   'Memoir',
+  'Biography',
+  'History',
+  'Poetry',
+]
+
+export const searchHints = [
+  'Books similar to La La Land',
+  'Characters with intense passion',
+  'A setting at a prominent law firm',
+  'A heroine who is already sure of herself',
+  'Books like a rainy campus slow burn',
+  'A morally grey lead who is still worth loving',
+  'The job is the whole plot',
+  'A marriage in trouble, and she chooses herself',
+  'Something that feels like Before Sunrise',
+  'An older man and a woman who knows what she wants',
 ]
 
 export const tropes = [
