@@ -133,3 +133,105 @@ begin
 exception
   when duplicate_object then null;
 end $$;
+
+-- Profile pictures and a host who can remove any post.
+-- Run this again in the SQL editor if the community tables already exist.
+-- The earliest profile becomes the host. Later members cannot take that role.
+
+alter table public.profiles add column if not exists avatar_url text;
+alter table public.profiles add column if not exists is_owner boolean not null default false;
+
+create or replace function public.keep_owner_flag()
+returns trigger
+language plpgsql
+as $$
+begin
+  if tg_op = 'INSERT' then
+    if auth.uid() is not null then
+      new.is_owner := false;
+    end if;
+    return new;
+  end if;
+  if auth.uid() is not null then
+    new.is_owner := old.is_owner;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_keep_owner_flag on public.profiles;
+create trigger profiles_keep_owner_flag
+  before insert or update on public.profiles
+  for each row execute function public.keep_owner_flag();
+
+update public.profiles
+set is_owner = true
+where not exists (select 1 from public.profiles where is_owner)
+  and id = (select id from public.profiles order by created_at asc limit 1);
+
+create or replace view public.member_names
+with (security_invoker = false) as
+  select id, name, avatar_url from public.profiles;
+
+grant select on public.member_names to anon, authenticated;
+
+drop policy if exists "authors delete posts" on public.posts;
+create policy "authors delete posts" on public.posts
+  for delete using (
+    auth.uid() = author_id
+    or exists (
+      select 1 from public.profiles as host
+      where host.id = auth.uid() and host.is_owner
+    )
+  );
+
+drop policy if exists "authors delete comments" on public.comments;
+create policy "authors delete comments" on public.comments
+  for delete using (
+    auth.uid() = author_id
+    or exists (
+      select 1 from public.profiles as host
+      where host.id = auth.uid() and host.is_owner
+    )
+  );
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'avatars',
+  'avatars',
+  true,
+  2097152,
+  array['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+)
+on conflict (id) do update
+set public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "anyone can view avatars" on storage.objects;
+create policy "anyone can view avatars" on storage.objects
+  for select using (bucket_id = 'avatars');
+
+drop policy if exists "members upload their avatar" on storage.objects;
+create policy "members upload their avatar" on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "members replace their avatar" on storage.objects;
+create policy "members replace their avatar" on storage.objects
+  for update to authenticated
+  using (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "members delete their avatar" on storage.objects;
+create policy "members delete their avatar" on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );

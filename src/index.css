@@ -575,6 +575,7 @@ textarea::placeholder {
 .nav {
   display: flex;
   justify-content: center;
+  align-items: center;
   gap: 22px;
   margin-top: 16px;
 }
@@ -589,6 +590,72 @@ textarea::placeholder {
 
 .nav-link[aria-current='page'] {
   color: var(--coral);
+}
+
+.account-chip,
+.avatar-pick {
+  border: 0;
+  background: none;
+  padding: 0;
+  border-radius: 999px;
+  line-height: 0;
+}
+
+.avatar {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #efe4da;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  flex: none;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar.lg {
+  width: 72px;
+  height: 72px;
+  font-size: 28px;
+}
+
+.account-chip .avatar {
+  width: 36px;
+  height: 36px;
+  font-size: 15px;
+}
+
+.person {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.profile-editor {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  width: min(100%, 420px);
+  margin-top: 8px;
+}
+
+.profile-editor form,
+.profile-fields {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
 }
 
 .community,
@@ -621,6 +688,14 @@ textarea::placeholder {
   letter-spacing: -0.03em;
 }
 
+.profile-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
 .hashtags h2 {
   font-size: 22px;
 }
@@ -649,6 +724,7 @@ textarea::placeholder {
 }
 
 .auth-card label,
+.profile-editor label,
 .reply {
   display: flex;
   flex-direction: column;
@@ -659,6 +735,7 @@ textarea::placeholder {
 }
 
 .auth-card input,
+.profile-editor input,
 .reply input {
   width: 100%;
   border: 0;

@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import AccountChip from './community/AccountChip.tsx'
 import Community from './community/Community.tsx'
 import { genres, movies, searchHints, siteLine, siteName, tropes } from './data/discover.ts'
 import { shelf } from './data/shelf.ts'
 import type { BookGroup, BookMatch, RecommendResponse, ShelfBook, SourceBook } from './types.ts'
 
 const PAGE = 12
+
+function openCommunity(hash = window.location.hash, search = window.location.search) {
+  return (
+    hash.startsWith('#community') ||
+    hash.startsWith('#profile') ||
+    hash.includes('type=recovery') ||
+    search.includes('type=recovery')
+  )
+}
 
 function newest(list: BookMatch[]): BookMatch[] {
   return [...list].sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
@@ -47,19 +57,12 @@ export default function App() {
   const [openMenu, setOpenMenu] = useState<'genre' | 'trope' | 'movie' | null>(null)
   const [hintIndex, setHintIndex] = useState(0)
   const [hintOn, setHintOn] = useState(true)
-  const [area, setArea] = useState<'search' | 'community'>(() =>
-    window.location.hash.startsWith('#community') || window.location.hash.startsWith('#profile') ? 'community' : 'search',
-  )
+  const [area, setArea] = useState<'search' | 'community'>(() => (openCommunity() ? 'community' : 'search'))
   const busy = useRef(false)
   const bar = useRef<HTMLFormElement>(null)
 
   useEffect(() => {
-    const sync = () =>
-      setArea(
-        window.location.hash.startsWith('#community') || window.location.hash.startsWith('#profile')
-          ? 'community'
-          : 'search',
-      )
+    const sync = () => setArea(openCommunity() ? 'community' : 'search')
     window.addEventListener('hashchange', sync)
     return () => window.removeEventListener('hashchange', sync)
   }, [])
@@ -271,6 +274,7 @@ export default function App() {
           }}>
             Community
           </button>
+          <AccountChip />
         </nav>
       </header>
 
