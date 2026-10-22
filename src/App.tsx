@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import AccountChip from './community/AccountChip.tsx'
 import Community from './community/Community.tsx'
 import { genres, movies, searchHints, siteLine, siteName, tropes } from './data/discover.ts'
-import { shelf } from './data/shelf.ts'
+import { shelves, type CatalogBook } from './data/catalog.ts'
 import type { BookGroup, BookMatch, RecommendResponse, ShelfBook, SourceBook } from './types.ts'
 
 const PAGE = 12
@@ -60,11 +60,24 @@ export default function App() {
   const [area, setArea] = useState<'search' | 'community'>(() => (openCommunity() ? 'community' : 'search'))
   const busy = useRef(false)
   const bar = useRef<HTMLFormElement>(null)
+  const searchRef = useRef<(text: string) => Promise<void>>(async () => {})
 
   useEffect(() => {
     const sync = () => setArea(openCommunity() ? 'community' : 'search')
     window.addEventListener('hashchange', sync)
     return () => window.removeEventListener('hashchange', sync)
+  }, [])
+
+  useEffect(() => {
+    function onOpen(event: Event) {
+      const book = (event as CustomEvent<CatalogBook>).detail
+      if (!book?.title) return
+      if (window.location.hash) window.location.hash = ''
+      const text = `Books like ${book.title}${book.authors[0] ? ` by ${book.authors[0]}` : ''}`
+      void searchRef.current(text)
+    }
+    window.addEventListener('open-book', onOpen)
+    return () => window.removeEventListener('open-book', onOpen)
   }, [])
 
   useEffect(() => {
@@ -248,6 +261,10 @@ export default function App() {
     setPhase('idle')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
+
+  useEffect(() => {
+    searchRef.current = search
+  })
 
   return (
     <div className="page">
@@ -488,31 +505,33 @@ export default function App() {
         )}
       </main>
 
-      <section className="shelf" aria-label="Books on the shelf">
-        <div className="shelf-head">
-          <h2>On the shelf</h2>
-          <p>Recent books readers are passing around. Pick one to find its neighbors.</p>
-        </div>
-        <div className="marquee">
-          <div className="track">
-            {[0, 1].map((copy) =>
-              shelf.map((book) => (
-                <ShelfCard
-                  key={`${book.id}-${copy}`}
-                  book={book}
-                  hiddenCopy={copy === 1}
-                  broken={Boolean(brokenCovers[book.id])}
-                  onBroken={() => setBrokenCovers((current) => ({ ...current, [book.id]: true }))}
-                  onPick={() => {
-                    const text = `Books like ${book.title}${book.authors[0] ? ` by ${book.authors[0]}` : ''}`
-                    void search(text)
-                  }}
-                />
-              )),
-            )}
+      {shelves.map((row, index) => (
+        <section className="shelf" aria-label={row.title} key={row.id}>
+          <div className="shelf-head">
+            <h2>{row.title}</h2>
+            <p>{row.line}</p>
           </div>
-        </div>
-      </section>
+          <div className="marquee">
+            <div className={index % 2 ? 'track reverse' : 'track'} style={{ animationDuration: `${92 + index * 14}s` }}>
+              {[0, 1].map((copy) =>
+                row.books.map((book) => (
+                  <ShelfCard
+                    key={`${book.id}-${copy}`}
+                    book={book}
+                    hiddenCopy={copy === 1}
+                    broken={Boolean(brokenCovers[book.id])}
+                    onBroken={() => setBrokenCovers((current) => ({ ...current, [book.id]: true }))}
+                    onPick={() => {
+                      const text = `Books like ${book.title}${book.authors[0] ? ` by ${book.authors[0]}` : ''}`
+                      void search(text)
+                    }}
+                  />
+                )),
+              )}
+            </div>
+          </div>
+        </section>
+      ))}
 
       <p className="fine">
         Covers and titles come from Open Library and Google Books. Booksrec recommends the book. It does not host the file.

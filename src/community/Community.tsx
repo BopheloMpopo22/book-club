@@ -1,5 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { Session, SupabaseClient } from '@supabase/supabase-js'
+import BookRail from './BookRail.tsx'
+import { catalog } from '../data/catalog.ts'
+import { mentions } from '../lib/mentions.ts'
 import { supabase } from '../lib/supabase.ts'
 
 const ROOM_PAGE = 20
@@ -238,6 +241,7 @@ export default function Community() {
   const visible = matched.slice(0, shown)
   const profileName = route.kind === 'profile' ? personName(people, route.id) : ''
   const ownProfile = route.kind === 'profile' && session?.user.id === route.id
+  const readerName = session ? people[session.user.id]?.name || String(session.user.user_metadata?.name ?? '') || 'Reader' : ''
 
   async function signIn(event: FormEvent) {
     event.preventDefault()
@@ -565,7 +569,9 @@ export default function Community() {
         )}
       </div>
 
-      <aside className="hashtags" aria-label="Hashtags">
+      <aside className="side">
+        <BookRail session={session} readerName={readerName} />
+        <div className="hashtags" aria-label="Hashtags">
         <h2>Hashtags</h2>
         <button type="button" className={route.kind === 'room' && !route.tag ? 'hash on' : 'hash'} onClick={() => openTag('')}>
           All conversations
@@ -591,22 +597,32 @@ export default function Community() {
             </button>
           </>
         )}
+      </div>
       </aside>
     </section>
   )
 }
 
 function Talk({ text, onTag }: { text: string; onTag: (tag: string) => void }) {
-  const parts = text.split(/(#[\p{L}\p{N}_]{2,40})/gu)
+  const parts = mentions(text, catalog)
   return (
     <p className="talk">
       {parts.map((part, index) =>
-        part.startsWith('#') ? (
-          <button key={`${part}-${index}`} type="button" className="inline-hash" onClick={() => onTag(part.slice(1).toLowerCase())}>
-            {part}
+        part.kind === 'hash' ? (
+          <button key={`${part.value}-${index}`} type="button" className="inline-hash" onClick={() => onTag(part.value.slice(1).toLowerCase())}>
+            {part.value}
+          </button>
+        ) : part.kind === 'book' ? (
+          <button
+            key={`${part.book.id}-${index}`}
+            type="button"
+            className="book-link"
+            onClick={() => window.dispatchEvent(new CustomEvent('open-book', { detail: part.book }))}
+          >
+            {part.value}
           </button>
         ) : (
-          <span key={`${index}-${part.slice(0, 12)}`}>{part}</span>
+          <span key={`${index}-${part.value.slice(0, 12)}`}>{part.value}</span>
         ),
       )}
     </p>

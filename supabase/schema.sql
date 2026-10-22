@@ -134,6 +134,39 @@ exception
   when duplicate_object then null;
 end $$;
 
+-- Ratings for the community book list.
+-- A star rating is saved here. A written reason is also posted into the room.
+
+create table if not exists public.book_ratings (
+  id uuid primary key default gen_random_uuid(),
+  author_id uuid not null references public.profiles (id) on delete cascade,
+  book_id text not null,
+  title text not null,
+  stars integer not null check (stars between 1 and 5),
+  reason text not null default '',
+  created_at timestamptz not null default now(),
+  unique (author_id, book_id)
+);
+
+alter table public.book_ratings enable row level security;
+
+grant select on public.book_ratings to anon, authenticated;
+grant insert, update on public.book_ratings to authenticated;
+
+drop policy if exists "ratings are visible" on public.book_ratings;
+drop policy if exists "members rate books" on public.book_ratings;
+drop policy if exists "members change their rating" on public.book_ratings;
+create policy "ratings are visible" on public.book_ratings for select using (true);
+create policy "members rate books" on public.book_ratings for insert with check (auth.uid() = author_id);
+create policy "members change their rating" on public.book_ratings for update using (auth.uid() = author_id);
+
+do $$
+begin
+  alter publication supabase_realtime add table public.book_ratings;
+exception
+  when duplicate_object then null;
+end $$;
+
 -- Profile pictures and a host who can remove any post.
 -- Run this again in the SQL editor if the community tables already exist.
 -- The earliest profile becomes the host. Later members cannot take that role.
