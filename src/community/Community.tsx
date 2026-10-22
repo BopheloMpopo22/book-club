@@ -79,19 +79,19 @@ export default function Community() {
 
   useEffect(() => {
     if (!supabase || route.kind !== 'profile') return
+    const client = supabase
     const id = route.id
     let stop = false
-    void supabase
-      .from('member_names')
-      .select('id, name')
-      .eq('id', id)
-      .maybeSingle()
-      .then(({ data }) => {
+    void (async () => {
+      try {
+        const { data } = await client.from('member_names').select('id, name').eq('id', id).maybeSingle()
         if (stop || !data) return
         const person = data as Person
         setPeople((current) => ({ ...current, [person.id]: person.name }))
-      })
-      .catch(() => {})
+      } catch {
+        // A missing name leaves the fallback label.
+      }
+    })()
     return () => {
       stop = true
     }
