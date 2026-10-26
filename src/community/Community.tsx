@@ -104,7 +104,10 @@ export default function Community() {
   const [repeatPassword, setRepeatPassword] = useState('')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const [formError, setFormError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [joinOpen, setJoinOpen] = useState(false)
+  const [joinMessage, setJoinMessage] = useState('Sign up to take part')
 
   useEffect(() => {
     if (!supabase) return
@@ -248,12 +251,12 @@ export default function Community() {
     if (!supabase) return
     setBusy(true)
     setNotice('')
-    setError('')
+    setFormError('')
     if (authMode === 'forgot') {
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
         redirectTo: `${window.location.origin}/#community`,
       })
-      if (resetError) setError(resetError.message)
+      if (resetError) setFormError(resetError.message)
       else setNotice('Check your email for a link to choose a new password.')
       setBusy(false)
       return
@@ -267,16 +270,20 @@ export default function Community() {
           emailRedirectTo: `${window.location.origin}/#community`,
         },
       })
-      if (signError) setError(signError.message)
+      if (signError) setFormError(signError.message)
       else if (!data.session) setNotice('Check your email to confirm the account, then sign in.')
       else {
         await supabase.from('profiles').upsert({ id: data.session.user.id, email: email.trim(), name: name.trim() })
         setPassword('')
+        setJoinOpen(false)
       }
     } else {
       const { error: signError } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
-      if (signError) setError(signError.message)
-      else setPassword('')
+      if (signError) setFormError(signError.message)
+      else {
+        setPassword('')
+        setJoinOpen(false)
+      }
     }
     setBusy(false)
   }
@@ -350,6 +357,12 @@ export default function Community() {
     window.location.hash = tag ? `community/${encodeURIComponent(tag)}` : 'community'
   }
 
+  function openJoin(message: string) {
+    setJoinMessage(message)
+    setAuthMode('up')
+    setJoinOpen(true)
+  }
+
   if (!supabase) {
     return (
       <section className="community-missing">
@@ -388,6 +401,15 @@ export default function Community() {
           </div>
         )}
 
+        {!session && !recovery && (
+          <div className="join-note">
+            <p>Read everything here. Sign up when you want to post, comment, or rate.</p>
+            <button type="button" className="solid" onClick={() => openJoin('Sign up to take part')}>
+              Sign up
+            </button>
+          </div>
+        )}
+
         {recovery && (
           <form className="auth-card" onSubmit={choosePassword}>
             <h2>Choose a new password</h2>
@@ -418,52 +440,26 @@ export default function Community() {
         )}
 
         {!session && route.kind === 'room' && !recovery && (
-          <form className="auth-card" onSubmit={signIn}>
-            <h2>{authMode === 'up' ? 'Join the conversation' : authMode === 'forgot' ? 'Reset your password' : 'Welcome back'}</h2>
-            <p className="meta">
-              {authMode === 'forgot'
-                ? 'We will email you a link back to this page.'
-                : 'Your name and email are saved with your profile. Anyone can read. Members can post.'}
-            </p>
-            {authMode === 'up' && (
-              <label>
-                Name
-                <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={40} />
-              </label>
-            )}
-            <label>
-              Email
-              <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+          <form
+            className="composer"
+            onSubmit={(event) => {
+              event.preventDefault()
+              openJoin('Sign up to post')
+            }}
+          >
+            <label className="sr-only" htmlFor="post">
+              Share with the community
             </label>
-            {authMode !== 'forgot' && (
-              <label>
-                Password
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  required
-                  minLength={6}
-                />
-              </label>
-            )}
-            <button className="solid" type="submit" disabled={busy}>
-              {authMode === 'up' ? 'Create profile' : authMode === 'forgot' ? 'Send reset link' : 'Sign in'}
+            <textarea
+              id="post"
+              rows={3}
+              readOnly
+              placeholder="What did you love, or what missed? Add #recommendation or a book name so others can find it."
+              onClick={() => openJoin('Sign up to post')}
+            />
+            <button className="solid" type="submit">
+              Post
             </button>
-            {authMode === 'in' && (
-              <button type="button" className="quiet" onClick={() => setAuthMode('forgot')}>
-                Forgot password
-              </button>
-            )}
-            {authMode === 'forgot' ? (
-              <button type="button" className="quiet" onClick={() => setAuthMode('in')}>
-                Back to sign in
-              </button>
-            ) : (
-              <button type="button" className="quiet" onClick={() => setAuthMode((mode) => (mode === 'up' ? 'in' : 'up'))}>
-                {authMode === 'up' ? 'I already have a profile' : 'Create a profile'}
-              </button>
-            )}
           </form>
         )}
 
@@ -486,7 +482,7 @@ export default function Community() {
           </form>
         )}
 
-        {notice && <p className="status">{notice}</p>}
+        {notice && !joinOpen && <p className="status">{notice}</p>}
         {error && <p className="status">{error}</p>}
 
         {visible.length === 0 && <p className="meta empty-room">Nothing in this part of the conversation yet.</p>}
@@ -528,7 +524,7 @@ export default function Community() {
                     )}
                   </div>
                 ))}
-                {session && (
+                {session ? (
                   <form
                     className="reply"
                     onSubmit={(event) => {
@@ -547,6 +543,19 @@ export default function Community() {
                       onChange={(event) => setReplies((current) => ({ ...current, [post.id]: event.target.value }))}
                     />
                     <button className="more" type="submit" disabled={busy || !(replies[post.id] ?? '').trim()}>
+                      Comment
+                    </button>
+                  </form>
+                ) : (
+                  <form
+                    className="reply"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      openJoin('Sign up to comment')
+                    }}
+                  >
+                    <input readOnly placeholder="Comment" aria-label="Comment" onClick={() => openJoin('Sign up to comment')} />
+                    <button className="more" type="submit">
                       Comment
                     </button>
                   </form>
@@ -570,7 +579,7 @@ export default function Community() {
       </div>
 
       <aside className="side">
-        <BookRail session={session} readerName={readerName} />
+        <BookRail session={session} readerName={readerName} onNeedAccount={() => openJoin('Sign up to rate')} />
         <div className="hashtags" aria-label="Hashtags">
         <h2>Hashtags</h2>
         <button type="button" className={route.kind === 'room' && !route.tag ? 'hash on' : 'hash'} onClick={() => openTag('')}>
@@ -599,6 +608,68 @@ export default function Community() {
         )}
       </div>
       </aside>
+      {joinOpen && (
+        <div
+          className="gate"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setJoinOpen(false)
+          }}
+        >
+          <form className="auth-card" role="dialog" aria-labelledby="gate-title" onSubmit={signIn}>
+            <h2 id="gate-title">{joinMessage}</h2>
+            <p className="meta">
+              {authMode === 'forgot'
+                ? 'We will email you a link back to this page.'
+                : 'A profile lets you write, comment, and rate. Anyone can already read.'}
+            </p>
+            {authMode === 'up' && (
+              <label>
+                Name
+                <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={40} />
+              </label>
+            )}
+            <label>
+              Email
+              <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+            </label>
+            {authMode !== 'forgot' && (
+              <label>
+                Password
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  required
+                  minLength={6}
+                />
+              </label>
+            )}
+            {notice && <p className="status">{notice}</p>}
+            {formError && <p className="status">{formError}</p>}
+            <button className="solid" type="submit" disabled={busy}>
+              {authMode === 'up' ? 'Create profile' : authMode === 'forgot' ? 'Send reset link' : 'Sign in'}
+            </button>
+            {authMode === 'in' && (
+              <button type="button" className="quiet" onClick={() => setAuthMode('forgot')}>
+                Forgot password
+              </button>
+            )}
+            {authMode === 'forgot' ? (
+              <button type="button" className="quiet" onClick={() => setAuthMode('in')}>
+                Back to sign in
+              </button>
+            ) : (
+              <button type="button" className="quiet" onClick={() => setAuthMode((mode) => (mode === 'up' ? 'in' : 'up'))}>
+                {authMode === 'up' ? 'I already have a profile' : 'Create a profile'}
+              </button>
+            )}
+            <button type="button" className="quiet" onClick={() => setJoinOpen(false)}>
+              Not now
+            </button>
+          </form>
+        </div>
+      )}
     </section>
   )
 }

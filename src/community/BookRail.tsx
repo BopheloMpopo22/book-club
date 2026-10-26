@@ -7,9 +7,19 @@ type Rating = { author_id: string; book_id: string; stars: number; reason: strin
 
 const genres = [...new Set(catalog.flatMap((book) => book.genres))].sort((a, b) => a.localeCompare(b))
 
-export default function BookRail({ session, readerName }: { session: Session | null; readerName: string }) {
+export default function BookRail({
+  session,
+  readerName,
+  onNeedAccount,
+}: {
+  session: Session | null
+  readerName: string
+  onNeedAccount: () => void
+}) {
   const list = useRef<HTMLDivElement>(null)
   const [genre, setGenre] = useState('')
+  const [finding, setFinding] = useState(false)
+  const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<string | null>(null)
   const [stars, setStars] = useState<Record<string, number>>({})
   const [reasons, setReasons] = useState<Record<string, string>>({})
@@ -18,10 +28,17 @@ export default function BookRail({ session, readerName }: { session: Session | n
   const [busy, setBusy] = useState(false)
 
   const books = useMemo(() => {
+    const needle = query.trim().toLowerCase()
     return catalog
       .filter((book) => !genre || book.genres.includes(genre))
+      .filter(
+        (book) =>
+          !needle ||
+          book.title.toLowerCase().includes(needle) ||
+          book.authors.some((author) => author.toLowerCase().includes(needle)),
+      )
       .sort((a, b) => (b.year ?? 0) - (a.year ?? 0) || a.title.localeCompare(b.title))
-  }, [genre])
+  }, [genre, query])
 
   useEffect(() => {
     if (!supabase) return
@@ -63,10 +80,11 @@ export default function BookRail({ session, readerName }: { session: Session | n
   }
 
   async function share(book: CatalogBook) {
-    if (!supabase || !session) {
-      setNote('Sign in to rate a book.')
+    if (!session) {
+      onNeedAccount()
       return
     }
+    if (!supabase) return
     const rating = stars[book.id]
     if (!rating) return
     const reason = (reasons[book.id] ?? '').trim()
@@ -100,22 +118,46 @@ export default function BookRail({ session, readerName }: { session: Session | n
     <div className="book-rail">
       <div className="rail-head">
         <h2>Books</h2>
-        <label className="sr-only" htmlFor="rail-genre">
-          Genre
-        </label>
-        <select id="rail-genre" value={genre} onChange={(event) => setGenre(event.target.value)}>
-          <option value="">All genres</option>
-          {genres.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
+        <div className="rail-tools">
+          <label className="sr-only" htmlFor="rail-genre">
+            Genre
+          </label>
+          <select id="rail-genre" value={genre} onChange={(event) => setGenre(event.target.value)}>
+            <option value="">All genres</option>
+            {genres.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className={finding ? 'rail-find on' : 'rail-find'}
+            aria-label="Search books"
+            aria-pressed={finding}
+            onClick={() => setFinding((open) => !open)}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="10.5" cy="10.5" r="6.5" />
+              <path d="M15.5 15.5 21 21" />
+            </svg>
+          </button>
+        </div>
       </div>
+      {finding && (
+        <input
+          className="rail-query"
+          value={query}
+          placeholder="Find a book"
+          aria-label="Find a book"
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      )}
       <button type="button" className="rail-arrow" aria-label="Newer books" onClick={() => list.current?.scrollBy({ top: -180, behavior: 'smooth' })}>
         ⌃
       </button>
       <div className="rail-list" ref={list}>
+        {books.length === 0 && <p className="meta">No book by that name in this list.</p>}
         {books.map((book) => {
           const summary = score(book.id)
           const open = picked === book.id
@@ -142,7 +184,13 @@ export default function BookRail({ session, readerName }: { session: Session | n
                         type="button"
                         className={value <= rating ? 'star on' : 'star'}
                         aria-label={`${value} out of 5`}
-                        onClick={() => setStars((current) => ({ ...current, [book.id]: value }))}
+                        onClick={() => {
+                          if (!session) {
+                            onNeedAccount()
+                            return
+                          }
+                          setStars((current) => ({ ...current, [book.id]: value }))
+                        }}
                       >
                         ★
                       </button>

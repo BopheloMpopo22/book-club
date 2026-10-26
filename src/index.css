@@ -660,13 +660,13 @@ textarea::placeholder {
 
 .community,
 .community-missing {
-  width: min(1040px, calc(100% - 40px));
+  width: min(1140px, calc(100% - 40px));
   margin: 28px auto 48px;
 }
 
 .community {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr) 340px;
   gap: 28px;
   align-items: start;
 }
@@ -890,7 +890,47 @@ textarea::placeholder {
   color: var(--muted);
   font: inherit;
   font-size: 13px;
-  max-width: 130px;
+  max-width: 148px;
+}
+
+.rail-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rail-find {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+}
+
+.rail-find.on {
+  color: var(--coral);
+}
+
+.rail-find svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+.rail-query {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  padding: 4px 0 6px;
 }
 
 .rail-arrow {
@@ -903,7 +943,7 @@ textarea::placeholder {
 }
 
 .rail-list {
-  max-height: 520px;
+  max-height: 640px;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -912,8 +952,8 @@ textarea::placeholder {
 }
 
 .rail-book img {
-  width: 42px;
-  height: 64px;
+  width: 50px;
+  height: 76px;
   object-fit: cover;
   border-radius: 4px;
   background: #efe4da;
@@ -979,6 +1019,45 @@ textarea::placeholder {
   color: var(--coral);
 }
 
+.join-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: min(100%, 440px);
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: var(--card);
+  border-radius: 18px;
+  box-shadow: 0 10px 30px rgba(90, 48, 28, 0.06);
+}
+
+.join-note p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.join-note .solid {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.gate {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(42, 33, 28, 0.35);
+}
+
+.gate .auth-card {
+  width: min(420px, 100%);
+  margin: 0;
+}
+
 @media (max-width: 800px) {
   .community {
     grid-template-columns: 1fr;
@@ -994,7 +1073,7 @@ textarea::placeholder {
   }
 
   .rail-list {
-    max-height: 280px;
+    max-height: 340px;
   }
 
   .search-foot {
