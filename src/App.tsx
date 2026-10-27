@@ -3,6 +3,7 @@ import AccountChip from './community/AccountChip.tsx'
 import Community from './community/Community.tsx'
 import { genres, movies, searchHints, siteLine, siteName, tropes } from './data/discover.ts'
 import { shelves, type CatalogBook } from './data/catalog.ts'
+import { recoveryOpen } from './lib/supabase.ts'
 import type { BookGroup, BookMatch, RecommendResponse, ShelfBook, SourceBook } from './types.ts'
 
 const PAGE = 12
@@ -11,8 +12,7 @@ function openCommunity(hash = window.location.hash, search = window.location.sea
   return (
     hash.startsWith('#community') ||
     hash.startsWith('#profile') ||
-    hash.includes('type=recovery') ||
-    search.includes('type=recovery')
+    recoveryOpen(hash, search)
   )
 }
 
@@ -365,7 +365,7 @@ export default function App() {
                 <span className={hintOn ? 'hint-line' : 'hint-line off'}>{searchHints[hintIndex]}</span>
               </p>
             )}
-          </div>
+        </div>
           {openMenu && (
             <div className="menu-panel" role="group" aria-label={openMenu}>
               {(openMenu === 'genre' ? genres : openMenu === 'trope' ? tropes : movies).map((option) => {
@@ -529,8 +529,8 @@ export default function App() {
                 )),
               )}
             </div>
-          </div>
-        </section>
+        </div>
+      </section>
       ))}
 
       <p className="fine">

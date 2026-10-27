@@ -3,7 +3,7 @@ import type { Session, SupabaseClient } from '@supabase/supabase-js'
 import BookRail from './BookRail.tsx'
 import { catalog } from '../data/catalog.ts'
 import { mentions } from '../lib/mentions.ts'
-import { supabase } from '../lib/supabase.ts'
+import { authMessage, recoveryLinkError, recoveryOpen, supabase } from '../lib/supabase.ts'
 
 const ROOM_PAGE = 20
 
@@ -92,7 +92,8 @@ export default function Community() {
   const [shownFor, setShownFor] = useState('')
   const [shownCount, setShownCount] = useState(ROOM_PAGE)
   const [host, setHost] = useState(false)
-  const [recovery, setRecovery] = useState(() => window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery'))
+  const [recovery, setRecovery] = useState(() => recoveryOpen(window.location.hash, window.location.search))
+  const [linkProblem] = useState(() => recoveryLinkError(window.location.hash, window.location.search))
   const [route, setRoute] = useState<RoomRoute>(readRoom)
   const [draft, setDraft] = useState('')
   const [replies, setReplies] = useState<Record<string, string>>({})
@@ -254,7 +255,7 @@ export default function Community() {
     setFormError('')
     if (authMode === 'forgot') {
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: `${window.location.origin}/#community`,
+        redirectTo: `${window.location.origin}/`,
       })
       if (resetError) setFormError(resetError.message)
       else setNotice('Check your email for a link to choose a new password.')
@@ -279,7 +280,7 @@ export default function Community() {
       }
     } else {
       const { error: signError } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
-      if (signError) setFormError(signError.message)
+      if (signError) setFormError(authMessage(signError.message))
       else {
         setPassword('')
         setJoinOpen(false)
@@ -288,23 +289,49 @@ export default function Community() {
     setBusy(false)
   }
 
+  function askForNewLink() {
+    window.history.replaceState(null, '', `${window.location.pathname}#community`)
+    setRecovery(false)
+    setError('')
+    setAuthMode('forgot')
+    setJoinMessage('Reset your password')
+    setJoinOpen(true)
+  }
+
   async function choosePassword(event: FormEvent) {
     event.preventDefault()
     if (!supabase) return
+    if (linkProblem) return
     if (nextPassword !== repeatPassword) {
       setError('Those passwords do not match.')
       return
     }
     setBusy(true)
     setError('')
+    const tokenHash = new URLSearchParams(window.location.search).get('token_hash')
+    if (tokenHash) {
+      const verified = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' })
+      if (verified.error) {
+        setError('This reset link has expired or was already opened. Request a new one, and open the newest email.')
+        setBusy(false)
+        return
+      }
+    } else {
+      const { data } = await supabase.auth.getSession()
+      if (!data.session) {
+        setError('This reset link has expired or was already opened. Request a new one, and open the newest email.')
+        setBusy(false)
+        return
+      }
+    }
     const { error: updateError } = await supabase.auth.updateUser({ password: nextPassword })
-    if (updateError) setError(updateError.message)
+    if (updateError) setError(authMessage(updateError.message))
     else {
       setNextPassword('')
       setRepeatPassword('')
       setRecovery(false)
-      setNotice('Your password is updated.')
-      window.location.hash = 'community'
+      setNotice('Your password is updated. You are signed in.')
+      window.history.replaceState(null, '', `${window.location.pathname}#community`)
     }
     setBusy(false)
   }
@@ -413,29 +440,41 @@ export default function Community() {
         {recovery && (
           <form className="auth-card" onSubmit={choosePassword}>
             <h2>Choose a new password</h2>
-            <label>
-              New password
-              <input
-                type="password"
-                value={nextPassword}
-                onChange={(event) => setNextPassword(event.target.value)}
-                required
-                minLength={6}
-              />
-            </label>
-            <label>
-              Repeat password
-              <input
-                type="password"
-                value={repeatPassword}
-                onChange={(event) => setRepeatPassword(event.target.value)}
-                required
-                minLength={6}
-              />
-            </label>
-            <button className="solid" type="submit" disabled={busy}>
-              Save password
-            </button>
+            {linkProblem ? (
+              <>
+                <p className="status">{linkProblem}</p>
+                <button type="button" className="solid" onClick={askForNewLink}>
+                  Send a new link
+                </button>
+              </>
+            ) : (
+              <>
+                <label>
+                  New password
+                  <input
+                    type="password"
+                    value={nextPassword}
+                    onChange={(event) => setNextPassword(event.target.value)}
+                    required
+                    minLength={6}
+                  />
+                </label>
+                <label>
+                  Repeat password
+                  <input
+                    type="password"
+                    value={repeatPassword}
+                    onChange={(event) => setRepeatPassword(event.target.value)}
+                    required
+                    minLength={6}
+                  />
+                </label>
+                {error && <p className="status">{error}</p>}
+                <button className="solid" type="submit" disabled={busy}>
+                  Save password
+                </button>
+              </>
+            )}
           </form>
         )}
 
@@ -483,7 +522,7 @@ export default function Community() {
         )}
 
         {notice && !joinOpen && <p className="status">{notice}</p>}
-        {error && <p className="status">{error}</p>}
+        {error && !recovery && <p className="status">{error}</p>}
 
         {visible.length === 0 && <p className="meta empty-room">Nothing in this part of the conversation yet.</p>}
 
