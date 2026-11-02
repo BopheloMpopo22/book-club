@@ -419,7 +419,7 @@ function titlesMatch(wanted: string, found: string): boolean {
 
 type TitlePick = { title: string; author: string; why: string }
 
-type NamedWork = { title: string; author: string; summary: string }
+type NamedWork = { title: string; author: string; summary: string; kind: 'book' | 'movie' }
 
 type Plan =
   | { mode: 'list'; reading: string; picks: TitlePick[]; source?: NamedWork }
@@ -453,7 +453,19 @@ function parseNamed(value: unknown): NamedWork | null {
   const author = typeof source?.author === 'string' ? source.author.trim() : ''
   const summary = typeof source?.summary === 'string' ? clip(source.summary, 560) : ''
   if (!title || !author || !summary) return null
-  return { title, author, summary }
+  return { title, author, summary, kind: source?.kind === 'movie' ? 'movie' : 'book' }
+}
+
+function wantsMovie(input: SearchInput, title: string): boolean {
+  if (input.movies.some((movie) => titlesMatch(movie, title))) return true
+  const query = input.query.toLowerCase().replace(/movies?-like|films?-like/g, '')
+  return /\b(movies?|films?|tv shows?|tv series|television series|miniseries)\b/.test(query)
+}
+
+function markMovie(source: NamedWork | null, input: SearchInput): NamedWork | null {
+  if (!source) return null
+  if (source.kind === 'movie' || wantsMovie(input, source.title)) return { ...source, kind: 'movie' }
+  return source
 }
 
 function parseReading(value: unknown, fallback: string): string {
@@ -475,15 +487,15 @@ Use mode "focused" when they name a book or a movie and also say what they like 
 
 Use mode "list" when they do not name a specific work. books are eight novels. why ties each one to the reading.
 
-For a movie, author is the director. Never invent a title or author. Do not stay in the decade of the book or movie they named. When a newer novel is a real match, include it. An older novel that is a true match stays too. If every true match is old, name those.
+For a movie, author is the director. source.kind is "movie" when the work they named is a film or a series, even if they asked for books like it. source.kind is "book" when that work is a book. Never invent a title or author. Do not stay in the decade of the book or movie they named. When a newer novel is a real match, include it. An older novel that is a true match stays too. If every true match is old, name those.
 
-{"reading":"","mode":"similar","source":{"title":"","author":"","summary":""},"groups":[{"label":"If you want ...","books":[{"title":"","author":"","why":""}]}]}
-{"reading":"","mode":"focused","source":{"title":"","author":"","summary":""},"books":[{"title":"","author":"","why":""}]}
+{"reading":"","mode":"similar","source":{"title":"","author":"","kind":"book","summary":""},"groups":[{"label":"If you want ...","books":[{"title":"","author":"","why":""}]}]}
+{"reading":"","mode":"focused","source":{"title":"","author":"","kind":"movie","summary":""},"books":[{"title":"","author":"","why":""}]}
 {"reading":"","mode":"list","books":[{"title":"","author":"","why":""}]}`
 
   const data = asRecord(await askModel(followUp, JSON.stringify(input)))
   if (!data) return null
-  const named = parseNamed(data.source)
+  const named = markMovie(parseNamed(data.source), input)
   if (data.mode === 'similar' && named) {
     const groups = Array.isArray(data.groups)
       ? data.groups.flatMap((item) => {
@@ -554,7 +566,86 @@ async function verifyPicks(picks: TitlePick[], exclude: string[]): Promise<Candi
   return newestFirst(dedupe(books))
 }
 
+function isFilmPage(description: string): boolean {
+  const text = description.toLowerCase()
+  if (!/\b(films?|movies?|miniseries|television series|tv series|animated series)\b/.test(text)) return false
+  return !/^(?:an? )?(?:\d{4} )?(novel|memoir|picture book)\b/.test(text)
+}
+
+function filmYear(description: string): number | null {
+  const match = description.match(/\b(19|20)\d{2}\b/)
+  const year = match ? Number(match[0]) : 0
+  return year >= 1900 && year <= THIS_YEAR ? year : null
+}
+
+function wikiImage(record: Record<string, unknown>): string | null {
+  const original = asRecord(record.originalimage)
+  const thumb = asRecord(record.thumbnail)
+  const source =
+    (typeof original?.source === 'string' && original.source) ||
+    (typeof thumb?.source === 'string' && thumb.source) ||
+    ''
+  return source.startsWith('https://upload.wikimedia.org/') ? source : null
+}
+
+async function wikiSummary(title: string): Promise<{ title: string; description: string; year: number | null; coverUrl: string | null; infoUrl: string } | null> {
+  const slug = encodeURIComponent(title.trim().replace(/\s+/g, '_'))
+  const record = asRecord(await fetchJson(`https://en.wikipedia.org/api/rest_v1/page/summary/${slug}`))
+  if (!record || record.type === 'disambiguation') return null
+  const pageTitle = typeof record.title === 'string' ? record.title : title
+  const description = typeof record.description === 'string' ? record.description : ''
+  const desktop = asRecord(asRecord(record.content_urls)?.desktop)
+  const infoUrl = typeof desktop?.page === 'string' ? desktop.page : `https://en.wikipedia.org/wiki/${slug}`
+  return { title: pageTitle, description, year: filmYear(description), coverUrl: wikiImage(record), infoUrl }
+}
+
+async function searchFilmTitle(title: string): Promise<string | null> {
+  const data = asRecord(
+    await fetchJson(`https://en.wikipedia.org/w/rest.php/v1/search/page?q=${encodeURIComponent(`${title} film`)}&limit=5`),
+  )
+  const pages = Array.isArray(data?.pages) ? data.pages : []
+  for (const item of pages) {
+    const page = asRecord(item)
+    const found = typeof page?.title === 'string' ? page.title : ''
+    const description = typeof page?.description === 'string' ? page.description : ''
+    if (found && isFilmPage(description) && movieTitlesMatch(title, found)) return found
+  }
+  return null
+}
+
+function movieTitlesMatch(wanted: string, found: string): boolean {
+  if (titlesMatch(wanted, found)) return true
+  const soften = (value: string) => normalize(value.replace(/\([^)]*\)/g, ' ').replace(/\b(the|and|a|an)\b/gi, ' '))
+  const left = soften(wanted)
+  const right = soften(found)
+  return left.length >= 4 && left === right
+}
+
+async function lookupMovie(title: string): Promise<{ title: string; year: number | null; coverUrl: string; infoUrl: string } | null> {
+  const take = (page: { title: string; description: string; year: number | null; coverUrl: string | null; infoUrl: string } | null) =>
+    page?.coverUrl && isFilmPage(page.description) && movieTitlesMatch(title, page.title) ? page : null
+  const direct = take(await wikiSummary(title))
+  if (direct?.coverUrl) return { title: direct.title, year: direct.year, coverUrl: direct.coverUrl, infoUrl: direct.infoUrl }
+  const found = await searchFilmTitle(title)
+  const chosen = found ? take(await wikiSummary(found)) : null
+  if (!chosen?.coverUrl) return null
+  return { title: chosen.title, year: chosen.year, coverUrl: chosen.coverUrl, infoUrl: chosen.infoUrl }
+}
+
 async function sourceCard(source: NamedWork): Promise<SourceBook> {
+  if (source.kind === 'movie') {
+    const movie = await lookupMovie(source.title)
+    if (movie) {
+      return {
+        title: movie.title,
+        authors: [source.author],
+        year: movie.year,
+        coverUrl: movie.coverUrl,
+        infoUrl: movie.infoUrl,
+        summary: source.summary,
+      }
+    }
+  }
   const match = await lookupTitle(source.title, source.author)
   return {
     title: match?.title || source.title,
