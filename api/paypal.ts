@@ -70,7 +70,7 @@ export async function handlePaypal(request: Request): Promise<Response> {
     custom_id?: string
     billing_info?: { next_billing_time?: string }
   }
-  const plan = readEnv('PAYPAL_PLAN_ID')
+  const plan = readEnv('PAYPAL_PLAN_ID') || 'P-7VP86448GS1036156NLUJWRA'
   if (plan && details.plan_id && details.plan_id !== plan) return json({ error: 'That payment is for a different plan.' }, 402)
   if (details.custom_id && details.custom_id !== userId) return json({ error: 'That payment belongs to another profile.' }, 403)
   if (details.status !== 'ACTIVE' && details.status !== 'APPROVED') {

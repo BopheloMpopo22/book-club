@@ -5,11 +5,11 @@ import { genres, movies, searchHints, siteLine, siteName, tropes } from './data/
 import { shelves, type CatalogBook } from './data/catalog.ts'
 import { recoveryOpen, supabase } from './lib/supabase.ts'
 import Pass from './search/Pass.tsx'
+import { paypalOn } from './search/paypal.ts'
 import type { BookGroup, BookMatch, RecommendResponse, ShelfBook, SourceBook } from './types.ts'
 
 const PAGE = 12
 const FREE_SEARCHES = 5
-const paypalOn = Boolean(import.meta.env.VITE_PAYPAL_CLIENT_ID && import.meta.env.VITE_PAYPAL_PLAN_ID)
 
 function guestSearches(): number {
   const count = Number(localStorage.getItem('booksrec-free-searches') || '0')

@@ -699,7 +699,7 @@ async function paypalAccess(): Promise<string> {
 
 async function meterSearch(request: Request, input: SearchInput): Promise<Response | null> {
   if (input.exclude.length > 0 || input.facet) return null
-  if (!readEnv('PAYPAL_PLAN_ID')) return null
+  if (!readEnv('PAYPAL_CLIENT_SECRET') || !readEnv('PAYPAL_CLIENT_ID')) return null
   const userId = await accountId(request)
   if (!userId) return null
   const url = readEnv('SUPABASE_URL').replace(/\/$/, '')
