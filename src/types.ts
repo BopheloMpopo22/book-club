@@ -41,4 +41,5 @@ export type RecommendResponse = {
   reading?: string
   usedAi: boolean
   error?: string
+  code?: string
 }

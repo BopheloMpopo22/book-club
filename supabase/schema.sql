@@ -268,3 +268,28 @@ create policy "members delete their avatar" on storage.objects
     bucket_id = 'avatars'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
+
+-- Five free searches, then a PayPal pass. Run this in the SQL editor.
+-- Members can read the counts. Only the server can change them.
+alter table public.profiles add column if not exists searches_used integer not null default 0;
+alter table public.profiles add column if not exists pass_until timestamptz;
+alter table public.profiles add column if not exists paypal_subscription_id text;
+
+create or replace function public.keep_pass_fields()
+returns trigger
+language plpgsql
+as $$
+begin
+  if tg_op = 'UPDATE' and auth.uid() is not null then
+    new.searches_used := old.searches_used;
+    new.pass_until := old.pass_until;
+    new.paypal_subscription_id := old.paypal_subscription_id;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_keep_pass_fields on public.profiles;
+create trigger profiles_keep_pass_fields
+  before update on public.profiles
+  for each row execute function public.keep_pass_fields();

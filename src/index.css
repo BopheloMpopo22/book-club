@@ -716,6 +716,19 @@ textarea::placeholder {
   margin-bottom: 16px;
 }
 
+.pass-card {
+  width: min(440px, 100%);
+  margin: 18px auto 0;
+}
+
+.pass-card form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+}
+
 .auth-card {
   display: flex;
   flex-direction: column;

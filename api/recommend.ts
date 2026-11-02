@@ -664,6 +664,93 @@ async function cacheResult(books: BookMatch[], input: SearchInput): Promise<void
   }
 }
 
+const FREE_SEARCHES = 5
+
+async function accountId(request: Request): Promise<string> {
+  const header = request.headers.get('Authorization') ?? ''
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
+  const url = readEnv('SUPABASE_URL').replace(/\/$/, '')
+  const key = readEnv('SUPABASE_SERVICE_ROLE_KEY')
+  if (!token || !url || !key) return ''
+  const response = await fetch(`${url}/auth/v1/user`, {
+    headers: { apikey: key, Authorization: `Bearer ${token}` },
+  })
+  if (!response.ok) return ''
+  const body = (await response.json()) as { id?: string }
+  return body.id ?? ''
+}
+
+async function paypalAccess(): Promise<string> {
+  const id = readEnv('PAYPAL_CLIENT_ID')
+  const secret = readEnv('PAYPAL_CLIENT_SECRET')
+  if (!id || !secret) return ''
+  const response = await fetch('https://api-m.paypal.com/v1/oauth2/token', {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${btoa(`${id}:${secret}`)}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials',
+  })
+  if (!response.ok) return ''
+  const body = (await response.json()) as { access_token?: string }
+  return body.access_token ?? ''
+}
+
+async function meterSearch(request: Request, input: SearchInput): Promise<Response | null> {
+  if (input.exclude.length > 0 || input.facet) return null
+  if (!readEnv('PAYPAL_PLAN_ID')) return null
+  const userId = await accountId(request)
+  if (!userId) return null
+  const url = readEnv('SUPABASE_URL').replace(/\/$/, '')
+  const key = readEnv('SUPABASE_SERVICE_ROLE_KEY')
+  if (!url || !key) return null
+  const headers = { apikey: key, Authorization: `Bearer ${key}` }
+  const read = await fetch(
+    `${url}/rest/v1/profiles?id=eq.${userId}&select=searches_used,pass_until,paypal_subscription_id`,
+    { headers },
+  )
+  if (!read.ok) return null
+  const rows = (await read.json()) as { searches_used?: number; pass_until?: string | null; paypal_subscription_id?: string | null }[]
+  const row = rows[0]
+  if (!row) return null
+  let until = row.pass_until ? new Date(row.pass_until).getTime() : 0
+  if (row.paypal_subscription_id && until < Date.now()) {
+    const access = await paypalAccess()
+    if (access) {
+      const sub = await fetch(`https://api-m.paypal.com/v1/billing/subscriptions/${row.paypal_subscription_id}`, {
+        headers: { Authorization: `Bearer ${access}` },
+      })
+      if (sub.ok) {
+        const body = (await sub.json()) as { status?: string; billing_info?: { next_billing_time?: string } }
+        if (body.status === 'ACTIVE' || body.status === 'APPROVED') {
+          const next = body.billing_info?.next_billing_time
+          until = next ? new Date(next).getTime() : Date.now() + 32 * 24 * 60 * 60 * 1000
+          await fetch(`${url}/rest/v1/profiles?id=eq.${userId}`, {
+            method: 'PATCH',
+            headers: { ...headers, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+            body: JSON.stringify({ pass_until: new Date(until).toISOString() }),
+          })
+        }
+      }
+    }
+  }
+  if (until > Date.now()) return null
+  const used = row.searches_used ?? 0
+  if (used >= FREE_SEARCHES) {
+    return json(
+      { error: 'Five free searches are included. Booksrec is $2 a month after that.', code: 'pass' },
+      402,
+    )
+  }
+  await fetch(`${url}/rest/v1/profiles?id=eq.${userId}`, {
+    method: 'PATCH',
+    headers: { ...headers, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify({ searches_used: used + 1 }),
+  })
+  return null
+}
+
 export async function handleRecommend(request: Request): Promise<Response> {
   if (request.method !== 'POST') return json({ error: 'Use POST.' }, 405)
   if (limited(request)) return json({ error: 'Booksrec needs a short break. Try again in a few minutes.' }, 429)
@@ -691,6 +778,9 @@ export async function handleRecommend(request: Request): Promise<Response> {
   if (!input.query && input.genres.length + input.tropes.length + input.movies.length === 0) {
     return json({ error: 'Tell Booksrec what you loved.' }, 400)
   }
+
+  const blocked = await meterSearch(request, input)
+  if (blocked) return blocked
 
   try {
     const result = await findBooks(input)

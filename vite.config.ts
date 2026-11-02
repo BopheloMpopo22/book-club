@@ -44,15 +44,21 @@ function booksApi(): Plugin {
     name: 'books-api',
     configureServer(server) {
       server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: (error?: unknown) => void) => {
-        if (!req.url?.startsWith('/api/recommend')) {
+        const path = req.url?.split('?')[0] ?? ''
+        if (path !== '/api/recommend' && path !== '/api/paypal') {
           next()
           return
         }
         try {
-          const mod = (await server.ssrLoadModule('/api/recommend.ts')) as {
-            handleRecommend: (request: Request) => Promise<Response>
+          const mod = (await server.ssrLoadModule(path === '/api/paypal' ? '/api/paypal.ts' : '/api/recommend.ts')) as {
+            handleRecommend?: (request: Request) => Promise<Response>
+            handlePaypal?: (request: Request) => Promise<Response>
           }
-          const response = await mod.handleRecommend(await toWebRequest(req))
+          const response = await (path === '/api/paypal' ? mod.handlePaypal?.(await toWebRequest(req)) : mod.handleRecommend?.(await toWebRequest(req)))
+          if (!response) {
+            next()
+            return
+          }
           res.statusCode = response.status
           response.headers.forEach((value, key) => {
             res.setHeader(key, value)

@@ -3,10 +3,24 @@ import AccountChip from './community/AccountChip.tsx'
 import Community from './community/Community.tsx'
 import { genres, movies, searchHints, siteLine, siteName, tropes } from './data/discover.ts'
 import { shelves, type CatalogBook } from './data/catalog.ts'
-import { recoveryOpen } from './lib/supabase.ts'
+import { recoveryOpen, supabase } from './lib/supabase.ts'
+import Pass from './search/Pass.tsx'
 import type { BookGroup, BookMatch, RecommendResponse, ShelfBook, SourceBook } from './types.ts'
 
 const PAGE = 12
+const FREE_SEARCHES = 5
+const paypalOn = Boolean(import.meta.env.VITE_PAYPAL_CLIENT_ID && import.meta.env.VITE_PAYPAL_PLAN_ID)
+
+function guestSearches(): number {
+  const count = Number(localStorage.getItem('booksrec-free-searches') || '0')
+  return Number.isFinite(count) ? count : 0
+}
+
+async function accessToken(): Promise<string> {
+  if (!supabase) return ''
+  const { data } = await supabase.auth.getSession()
+  return data.session?.access_token ?? ''
+}
 
 function openCommunity(hash = window.location.hash, search = window.location.search) {
   return (
@@ -55,6 +69,7 @@ export default function App() {
   const [correction, setCorrection] = useState('')
   const [brokenCovers, setBrokenCovers] = useState<Record<string, boolean>>({})
   const [openMenu, setOpenMenu] = useState<'genre' | 'trope' | 'movie' | null>(null)
+  const [passOpen, setPassOpen] = useState(false)
   const [hintIndex, setHintIndex] = useState(0)
   const [hintOn, setHintOn] = useState(true)
   const [area, setArea] = useState<'search' | 'community'>(() => (openCommunity() ? 'community' : 'search'))
@@ -118,13 +133,23 @@ export default function App() {
   }
 
   async function ask(body: Record<string, unknown>): Promise<RecommendResponse | null> {
+    const token = await accessToken()
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) headers.Authorization = `Bearer ${token}`
     const response = await fetch('/api/recommend', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body),
     })
     const data = (await response.json()) as RecommendResponse
     if (!response.ok) {
+      if (data.code === 'pass') {
+        if (paypalOn) {
+          setPassOpen(true)
+          setError('')
+        } else setError(data.error || 'Five free searches are included. Booksrec is $2 a month after that.')
+        return null
+      }
       setError(data.error || 'Search failed.')
       return null
     }
@@ -145,6 +170,11 @@ export default function App() {
     const text = nextQuery.trim()
     if (busy.current) return
     if (!text && pickedGenres.length + pickedTropes.length + pickedMovies.length === 0) return
+    const token = paypalOn ? await accessToken() : ''
+    if (paypalOn && !token && guestSearches() >= FREE_SEARCHES) {
+      setPassOpen(true)
+      return
+    }
     busy.current = true
     setQuery(nextQuery)
     setPhase('loading')
@@ -173,6 +203,7 @@ export default function App() {
       setVisible(PAGE)
       setCanLoadMore(true)
       setPhase('ready')
+      if (paypalOn && !token) localStorage.setItem('booksrec-free-searches', String(guestSearches() + 1))
       if (!nextBooks.length && !nextGroups.length && !data.sourceBook) {
         setError('Nothing close enough turned up. Name the hero, the job, or a book it felt like.')
       }
@@ -394,6 +425,7 @@ export default function App() {
             </div>
           )}
         </form>
+        {passOpen && paypalOn && <Pass onClose={() => setPassOpen(false)} onReady={() => setPassOpen(false)} />}
 
         <p className="status" role="status">
           {phase === 'loading' ? 'Finding the closest books…' : error}
