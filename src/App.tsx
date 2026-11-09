@@ -696,7 +696,7 @@ export default function App() {
       ))}
 
       <p className="fine">
-        Covers and titles come from Open Library and Google Books. Booksrec recommends the book. It does not host the file.
+        Covers come from Open Library, Google Books, and Wikipedia. Booksrec recommends the book. It does not host the file.
       </p>
       </>
       )}

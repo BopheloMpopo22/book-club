@@ -224,9 +224,7 @@ async function searchGoogle(query: string, count = 8): Promise<Candidate[]> {
       (typeof images?.thumbnail === 'string' && images.thumbnail) ||
       (typeof images?.smallThumbnail === 'string' && images.smallThumbnail) ||
       ''
-    const coverUrl = rawCover
-      ? rawCover.replace('http://', 'https://').replace('&edge=curl', '')
-      : `https://books.google.com/books/content?id=${id}&printsec=frontcover&img=1&zoom=1`
+    const coverUrl = rawCover ? rawCover.replace('http://', 'https://').replace('&edge=curl', '') : null
     const infoUrl =
       (typeof info?.infoLink === 'string' && info.infoLink) ||
       (typeof info?.canonicalVolumeLink === 'string' && info.canonicalVolumeLink) ||
@@ -525,7 +523,7 @@ function pickMatch(found: Candidate[], title: string, authorBit: string): Candid
     ? titleHits.filter((book) => book.authors.some((name) => normalize(name).includes(normalize(authorBit))))
     : []
   const pool = authorBit ? authorHits : titleHits
-  pool.sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
+  pool.sort((a, b) => Number(Boolean(b.coverUrl)) - Number(Boolean(a.coverUrl)) || (b.year ?? 0) - (a.year ?? 0))
   return pool[0] ?? null
 }
 
@@ -563,7 +561,8 @@ async function verifyPicks(picks: TitlePick[], exclude: string[]): Promise<Candi
     if (!book || !pick) return
     books.push({ ...book, why: pick.why })
   })
-  return newestFirst(dedupe(books))
+  const covered = await Promise.all(dedupe(books).map((book) => fillCover(book)))
+  return newestFirst(covered)
 }
 
 function isFilmPage(description: string): boolean {
@@ -588,15 +587,16 @@ function wikiImage(record: Record<string, unknown>): string | null {
   return source.startsWith('https://upload.wikimedia.org/') ? source : null
 }
 
-async function wikiSummary(title: string): Promise<{ title: string; description: string; year: number | null; coverUrl: string | null; infoUrl: string } | null> {
+async function wikiSummary(title: string): Promise<{ title: string; description: string; extract: string; year: number | null; coverUrl: string | null; infoUrl: string } | null> {
   const slug = encodeURIComponent(title.trim().replace(/\s+/g, '_'))
   const record = asRecord(await fetchJson(`https://en.wikipedia.org/api/rest_v1/page/summary/${slug}`))
   if (!record || record.type === 'disambiguation') return null
   const pageTitle = typeof record.title === 'string' ? record.title : title
   const description = typeof record.description === 'string' ? record.description : ''
+  const extract = typeof record.extract === 'string' ? record.extract : ''
   const desktop = asRecord(asRecord(record.content_urls)?.desktop)
   const infoUrl = typeof desktop?.page === 'string' ? desktop.page : `https://en.wikipedia.org/wiki/${slug}`
-  return { title: pageTitle, description, year: filmYear(description), coverUrl: wikiImage(record), infoUrl }
+  return { title: pageTitle, description, extract, year: filmYear(description), coverUrl: wikiImage(record), infoUrl }
 }
 
 async function searchFilmTitle(title: string): Promise<string | null> {
@@ -608,12 +608,12 @@ async function searchFilmTitle(title: string): Promise<string | null> {
     const page = asRecord(item)
     const found = typeof page?.title === 'string' ? page.title : ''
     const description = typeof page?.description === 'string' ? page.description : ''
-    if (found && isFilmPage(description) && movieTitlesMatch(title, found)) return found
+    if (found && isFilmPage(description) && looseTitlesMatch(title, found)) return found
   }
   return null
 }
 
-function movieTitlesMatch(wanted: string, found: string): boolean {
+function looseTitlesMatch(wanted: string, found: string): boolean {
   if (titlesMatch(wanted, found)) return true
   const soften = (value: string) => normalize(value.replace(/\([^)]*\)/g, ' ').replace(/\b(the|and|a|an)\b/gi, ' '))
   const left = soften(wanted)
@@ -623,13 +623,67 @@ function movieTitlesMatch(wanted: string, found: string): boolean {
 
 async function lookupMovie(title: string): Promise<{ title: string; year: number | null; coverUrl: string; infoUrl: string } | null> {
   const take = (page: { title: string; description: string; year: number | null; coverUrl: string | null; infoUrl: string } | null) =>
-    page?.coverUrl && isFilmPage(page.description) && movieTitlesMatch(title, page.title) ? page : null
+    page?.coverUrl && isFilmPage(page.description) && looseTitlesMatch(title, page.title) ? page : null
   const direct = take(await wikiSummary(title))
   if (direct?.coverUrl) return { title: direct.title, year: direct.year, coverUrl: direct.coverUrl, infoUrl: direct.infoUrl }
   const found = await searchFilmTitle(title)
   const chosen = found ? take(await wikiSummary(found)) : null
   if (!chosen?.coverUrl) return null
   return { title: chosen.title, year: chosen.year, coverUrl: chosen.coverUrl, infoUrl: chosen.infoUrl }
+}
+
+function isBookPage(description: string): boolean {
+  const text = description.toLowerCase()
+  if (/\b(film|movie|miniseries|television series|tv series)\b/.test(text) && !/\b(novel|memoir|book)\b/.test(text)) return false
+  return /\b(novel|memoir|picture book|short stor(?:y|ies)|autobiography|biography|self-help book|non-?fiction book|poetry collection|book by)\b/.test(text)
+}
+
+function authorAgrees(page: { description: string; extract: string }, author: string): boolean {
+  const last = normalize(lastName(author))
+  if (last.length < 3) return true
+  return normalize(`${page.description} ${page.extract}`).includes(last)
+}
+
+async function searchBookTitles(title: string, author: string): Promise<string[]> {
+  const data = asRecord(
+    await fetchJson(
+      `https://en.wikipedia.org/w/rest.php/v1/search/page?q=${encodeURIComponent(`${title} ${lastName(author)} novel`)}&limit=5`,
+    ),
+  )
+  const pages = Array.isArray(data?.pages) ? data.pages : []
+  const foundTitles: string[] = []
+  for (const item of pages) {
+    const page = asRecord(item)
+    const found = typeof page?.title === 'string' ? page.title : ''
+    const description = typeof page?.description === 'string' ? page.description : ''
+    if (found && isBookPage(description) && looseTitlesMatch(title, found)) foundTitles.push(found)
+  }
+  return foundTitles
+}
+
+async function lookupBookCover(title: string, author: string): Promise<string | null> {
+  const take = (page: { title: string; description: string; extract: string; coverUrl: string | null } | null) =>
+    page?.coverUrl && isBookPage(page.description) && looseTitlesMatch(title, page.title) && authorAgrees(page, author)
+      ? page.coverUrl
+      : null
+  const direct = take(await wikiSummary(title))
+  if (direct) return direct
+  for (const found of await searchBookTitles(title, author)) {
+    const cover = take(await wikiSummary(found))
+    if (cover) return cover
+  }
+  return null
+}
+
+async function fillCover(book: Candidate): Promise<Candidate> {
+  if (book.coverUrl) return book
+  const cover = await lookupBookCover(book.title, book.authors[0] ?? '')
+  if (cover) return { ...book, coverUrl: cover }
+  if (!book.id.startsWith('gb:')) return book
+  return {
+    ...book,
+    coverUrl: `https://books.google.com/books/content?id=${book.id.slice(3)}&printsec=frontcover&img=1&zoom=1`,
+  }
 }
 
 async function sourceCard(source: NamedWork): Promise<SourceBook> {
@@ -646,7 +700,8 @@ async function sourceCard(source: NamedWork): Promise<SourceBook> {
       }
     }
   }
-  const match = await lookupTitle(source.title, source.author)
+  const found = await lookupTitle(source.title, source.author)
+  const match = found ? await fillCover(found) : null
   return {
     title: match?.title || source.title,
     authors: match?.authors.length ? match.authors : [source.author],
