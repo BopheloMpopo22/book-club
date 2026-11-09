@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import AccountChip from './community/AccountChip.tsx'
 import Community from './community/Community.tsx'
 import { genres, movies, searchHints, siteLine, siteName, tropes } from './data/discover.ts'
@@ -50,6 +50,69 @@ function meta(authors: string[], year: number | null): string {
   return [authors.join(', '), year].filter(Boolean).join(' · ')
 }
 
+const PLAY_BOOK_MS = 5600
+const PLAY_HEADLINE_MS = 2600
+
+type Shown =
+  | { kind: 'headline'; title: string }
+  | {
+      kind: 'work'
+      kicker: string
+      title: string
+      authors: string[]
+      year: number | null
+      coverUrl: string | null
+      coverKey: string
+      text: string
+      note: string
+      infoUrl: string
+    }
+
+function bookCard(book: BookMatch): Shown {
+  const why = book.why.trim()
+  const description = book.description.trim()
+  const same =
+    description.length > 0 && why.length > 0 && description.includes(why.replace(/…$/, '').slice(0, 48))
+  return {
+    kind: 'work',
+    kicker: '',
+    title: book.title,
+    authors: book.authors,
+    year: book.year,
+    coverUrl: book.coverUrl,
+    coverKey: book.id,
+    text: why || description,
+    note: description && !same && description !== why ? description : '',
+    infoUrl: book.infoUrl,
+  }
+}
+
+function sourceCard(source: SourceBook): Shown {
+  return {
+    kind: 'work',
+    kicker: 'This is the one you named',
+    title: source.title,
+    authors: source.authors,
+    year: source.year,
+    coverUrl: source.coverUrl,
+    coverKey: source.title,
+    text: source.summary,
+    note: '',
+    infoUrl: source.infoUrl,
+  }
+}
+
+function buildSteps(source: SourceBook | null, groups: BookGroup[], books: BookMatch[]): Shown[] {
+  const steps: Shown[] = []
+  if (source) steps.push(sourceCard(source))
+  for (const group of groups) {
+    if (group.label) steps.push({ kind: 'headline', title: group.label })
+  }
+  const list = groups.length > 0 ? groups.flatMap((group) => group.books) : books
+  for (const book of list) steps.push(bookCard(book))
+  return steps
+}
+
 export default function App() {
   const [query, setQuery] = useState('')
   const [pickedGenres, setGenres] = useState<string[]>([])
@@ -73,12 +136,23 @@ export default function App() {
   const [hintIndex, setHintIndex] = useState(0)
   const [hintOn, setHintOn] = useState(true)
   const [area, setArea] = useState<'search' | 'community'>(() => (openCommunity() ? 'community' : 'search'))
+  const [playbackOn, setPlaybackOn] = useState(() => localStorage.getItem('booksrec-playback') === '1')
+  const [playIndex, setPlayIndex] = useState<number | null>(null)
+  const [opened, setOpened] = useState<Shown | null>(null)
+  const playbackRef = useRef(playbackOn)
   const busy = useRef(false)
   const bar = useRef<HTMLFormElement>(null)
   const searchRef = useRef<(text: string) => Promise<void>>(async () => {})
 
   useEffect(() => {
-    const sync = () => setArea(openCommunity() ? 'community' : 'search')
+    const sync = () => {
+      const next = openCommunity() ? 'community' : 'search'
+      setArea(next)
+      if (next !== 'search') {
+        setPlayIndex(null)
+        setOpened(null)
+      }
+    }
     window.addEventListener('hashchange', sync)
     return () => window.removeEventListener('hashchange', sync)
   }, [])
@@ -188,6 +262,8 @@ export default function App() {
     setExhaustedGroups({})
     setCorrecting(false)
     setCorrection('')
+    setPlayIndex(null)
+    setOpened(null)
     try {
       const data = await ask(requestBody(text))
       if (!data) {
@@ -203,6 +279,12 @@ export default function App() {
       setVisible(PAGE)
       setCanLoadMore(true)
       setPhase('ready')
+      if (
+        playbackRef.current &&
+        (nextBooks.length > 0 || nextGroups.length > 0 || data.sourceBook)
+      ) {
+        setPlayIndex(0)
+      }
       if (paypalOn && !token) localStorage.setItem('booksrec-free-searches', String(guestSearches() + 1))
       if (!nextBooks.length && !nextGroups.length && !data.sourceBook) {
         setError('Nothing close enough turned up. Name the hero, the job, or a book it felt like.')
@@ -290,10 +372,49 @@ export default function App() {
     setCorrecting(false)
     setCorrection('')
     setPhase('idle')
+    setPlayIndex(null)
+    setOpened(null)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  const steps = useMemo(
+    () => buildSteps(sourceBook, groups, books.slice(0, visible)),
+    [sourceBook, groups, books, visible],
+  )
+  const activeIndex = playIndex !== null && playIndex < steps.length ? playIndex : null
+  const shown = activeIndex !== null ? steps[activeIndex] : opened
+
   useEffect(() => {
+    if (area !== 'search' || activeIndex === null) return
+    const delay = steps[activeIndex]?.kind === 'headline' ? PLAY_HEADLINE_MS : PLAY_BOOK_MS
+    const id = window.setTimeout(() => setPlayIndex(activeIndex + 1), delay)
+    return () => window.clearTimeout(id)
+  }, [area, activeIndex, steps])
+
+  function showCard(card: Shown) {
+    setPlayIndex(null)
+    setOpened(card)
+  }
+
+  function closeShown() {
+    setPlayIndex(null)
+    setOpened(null)
+  }
+
+  function togglePlayback() {
+    const next = !playbackOn
+    setPlaybackOn(next)
+    localStorage.setItem('booksrec-playback', next ? '1' : '0')
+    setOpened(null)
+    if (!next) {
+      setPlayIndex(null)
+      return
+    }
+    if (phase === 'ready' && steps.length > 0) setPlayIndex(0)
+  }
+
+  useEffect(() => {
+    playbackRef.current = playbackOn
     searchRef.current = search
   })
 
@@ -427,9 +548,14 @@ export default function App() {
         </form>
         {passOpen && paypalOn && <Pass onClose={() => setPassOpen(false)} onReady={() => setPassOpen(false)} />}
 
-        <p className="status" role="status">
-          {phase === 'loading' ? 'Finding the closest books…' : error}
-        </p>
+        <div className="status-row">
+          <p className="status" role="status">
+            {phase === 'loading' ? 'Finding the closest books…' : error}
+          </p>
+          <button type="button" className={playbackOn ? 'play-switch on' : 'play-switch'} aria-pressed={playbackOn} onClick={togglePlayback}>
+            {playbackOn ? 'Playback on' : 'Playback off'}
+          </button>
+        </div>
 
         {phase !== 'idle' && (
           <section className="matches" id="matches" aria-live="polite">
@@ -444,18 +570,20 @@ export default function App() {
                 {reading && <p className="reading">{reading}</p>}
                 {sourceBook && (
                   <article className="source">
-                    <Cover
-                      title={sourceBook.title}
-                      src={sourceBook.coverUrl}
-                      broken={Boolean(brokenCovers[sourceBook.title])}
-                      onBroken={() => setBrokenCovers((current) => ({ ...current, [sourceBook.title]: true }))}
-                    />
+                    <button type="button" className="cover-hit" onClick={() => showCard(sourceCard(sourceBook))}>
+                      <Cover
+                        title={sourceBook.title}
+                        src={sourceBook.coverUrl}
+                        broken={Boolean(brokenCovers[sourceBook.title])}
+                        onBroken={() => setBrokenCovers((current) => ({ ...current, [sourceBook.title]: true }))}
+                      />
+                    </button>
                     <div>
                       <p className="eyebrow">This is the one you named</p>
                       <h2>
-                        <a href={sourceBook.infoUrl} target="_blank" rel="noreferrer">
+                        <button type="button" className="source-open" onClick={() => showCard(sourceCard(sourceBook))}>
                           {sourceBook.title}
-                        </a>
+                        </button>
                       </h2>
                       <p className="meta">{meta(sourceBook.authors, sourceBook.year)}</p>
                       <p className="why">{sourceBook.summary}</p>
@@ -496,6 +624,7 @@ export default function App() {
                       books={group.books}
                       brokenCovers={brokenCovers}
                       onBroken={(id) => setBrokenCovers((current) => ({ ...current, [id]: true }))}
+                      onOpen={(book) => showCard(bookCard(book))}
                     />
                     {!exhaustedGroups[group.id] && (
                       <button
@@ -515,6 +644,7 @@ export default function App() {
                       books={books.slice(0, visible)}
                       brokenCovers={brokenCovers}
                       onBroken={(id) => setBrokenCovers((current) => ({ ...current, [id]: true }))}
+                      onOpen={(book) => showCard(bookCard(book))}
                     />
                     {(visible < books.length || canLoadMore) && (
                       <button
@@ -570,6 +700,17 @@ export default function App() {
       </p>
       </>
       )}
+      {area === 'search' && shown && (
+        <Spotlight
+          item={shown}
+          stepKey={activeIndex !== null ? `play-${activeIndex}` : `open-${shown.kind}-${shown.title}`}
+          broken={shown.kind === 'work' && Boolean(brokenCovers[shown.coverKey])}
+          onBroken={() => {
+            if (shown.kind === 'work') setBrokenCovers((current) => ({ ...current, [shown.coverKey]: true }))
+          }}
+          onClose={closeShown}
+        />
+      )}
     </div>
   )
 }
@@ -619,16 +760,23 @@ function BookList({
   books,
   brokenCovers,
   onBroken,
+  onOpen,
 }: {
   books: BookMatch[]
   brokenCovers: Record<string, boolean>
   onBroken: (id: string) => void
+  onOpen: (book: BookMatch) => void
 }) {
   return (
     <ul>
       {books.map((book) => (
         <li key={book.id}>
-          <ResultBook book={book} broken={Boolean(brokenCovers[book.id])} onBroken={() => onBroken(book.id)} />
+          <ResultBook
+            book={book}
+            broken={Boolean(brokenCovers[book.id])}
+            onBroken={() => onBroken(book.id)}
+            onOpen={() => onOpen(book)}
+          />
         </li>
       ))}
     </ul>
@@ -639,27 +787,90 @@ function ResultBook({
   book,
   broken,
   onBroken,
+  onOpen,
 }: {
   book: BookMatch
   broken: boolean
   onBroken: () => void
+  onOpen: () => void
 }) {
   const showBlurb =
     book.description.length > 0 && !book.description.includes(book.why.replace(/…$/, '').slice(0, 48))
   return (
-    <article className="result">
+    <button type="button" className="result" onClick={onOpen}>
       <Cover title={book.title} src={book.coverUrl} broken={broken} onBroken={onBroken} />
       <div>
-        <h3>
-          <a href={book.infoUrl} target="_blank" rel="noreferrer">
-            {book.title}
-          </a>
-        </h3>
+        <h3>{book.title}</h3>
         <p className="meta">{meta(book.authors, book.year)}</p>
         <p className="why">{book.why}</p>
         {showBlurb && <p className="blurb">{book.description}</p>}
       </div>
-    </article>
+    </button>
+  )
+}
+
+function Spotlight({
+  item,
+  stepKey,
+  broken,
+  onBroken,
+  onClose,
+}: {
+  item: Shown
+  stepKey: string
+  broken: boolean
+  onBroken: () => void
+  onClose: () => void
+}) {
+  const closeRef = useRef(onClose)
+  useEffect(() => {
+    closeRef.current = onClose
+  })
+  useEffect(() => {
+    function onKey(event: globalThis.KeyboardEvent) {
+      if (event.key === 'Escape') closeRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previous
+    }
+  }, [])
+  const label = item.title
+  return (
+    <div className="spotlight" onClick={onClose}>
+      <div
+        key={stepKey}
+        className={item.kind === 'headline' ? 'spotlight-card headline' : 'spotlight-card'}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button type="button" className="spotlight-close" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+        {item.kind === 'headline' ? (
+          <h2>{item.title}</h2>
+        ) : (
+          <>
+            {item.kicker && <p className="eyebrow">{item.kicker}</p>}
+            <Cover title={item.title} src={item.coverUrl} broken={broken} onBroken={onBroken} />
+            <h2>{item.title}</h2>
+            <p className="meta">{meta(item.authors, item.year)}</p>
+            {item.text && <p className="spotlight-copy">{item.text}</p>}
+            {item.note && <p className="spotlight-note">{item.note}</p>}
+            {item.infoUrl && (
+              <a className="quiet" href={item.infoUrl} target="_blank" rel="noreferrer">
+                More about this
+              </a>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   )
 }
 
