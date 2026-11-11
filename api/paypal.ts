@@ -52,7 +52,19 @@ type PaypalOrder = {
     amount?: { currency_code?: string; value?: string }
     payments?: { captures?: { status?: string; amount?: { currency_code?: string; value?: string } }[] }
   }[]
-  details?: { issue?: string }[]
+  message?: string
+  details?: { issue?: string; description?: string }[]
+}
+
+function paypalProblem(body: PaypalOrder): string {
+  const issue = body.details?.[0]?.issue ?? ''
+  if (issue === 'CURRENCY_NOT_SUPPORTED') return 'This PayPal account cannot take a $2 payment yet.'
+  if (issue === 'PAYEE_ACCOUNT_RESTRICTED' || issue === 'PAYEE_ACCOUNT_LOCKED_OR_CLOSED') {
+    return 'PayPal has not finished opening this business account for payments.'
+  }
+  const description = body.details?.[0]?.description?.trim()
+  if (description && description.length < 180) return description
+  return 'PayPal could not start the payment.'
 }
 
 function paidOrder(details: PaypalOrder, userId: string): boolean {
@@ -83,15 +95,10 @@ async function createOrder(userId: string, access: string): Promise<Response> {
           amount: { currency_code: 'USD', value: '2.00' },
         },
       ],
-      application_context: {
-        brand_name: 'Booksrec',
-        shipping_preference: 'NO_SHIPPING',
-        user_action: 'PAY_NOW',
-      },
     }),
   })
   const details = (await response.json()) as PaypalOrder
-  if (!response.ok || !details.id) return json({ error: 'PayPal could not start the payment.' }, 502)
+  if (!response.ok || !details.id) return json({ error: paypalProblem(details) }, 502)
   return json({ orderId: details.id })
 }
 

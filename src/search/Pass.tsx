@@ -13,7 +13,8 @@ type PaypalApi = {
     style?: { shape: 'pill'; color: 'gold'; layout: 'vertical'; label: 'pay' }
     createOrder: () => Promise<string>
     onApprove: (data: { orderID?: string }) => Promise<void>
-    onError: () => void
+    onError: (error?: unknown) => void
+    onCancel: () => void
   }) => PaypalButtons
 }
 
@@ -99,7 +100,11 @@ export default function Pass({ onClose, onReady }: { onClose: () => void; onRead
         }
         readyRef.current()
       },
-      onError: () => setError('PayPal did not finish the payment.'),
+      onCancel: () => setError('The payment window was closed before it finished.'),
+      onError: (error) => {
+        const detail = error instanceof Error ? error.message : ''
+        setError((current) => current || (detail && detail !== 'create' && detail.length < 180 ? detail : 'PayPal could not open the payment.'))
+      },
     })
     void buttons.render(node).catch(() => {
       if (!stop) setError('PayPal could not be shown.')
