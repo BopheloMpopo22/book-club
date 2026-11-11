@@ -221,7 +221,7 @@ export default function App() {
         if (paypalOn) {
           setPassOpen(true)
           setError('')
-        } else setError(data.error || 'Five free searches are included. Booksrec is $2 a month after that.')
+        } else setError(data.error || 'Five free searches are included. Booksrec is $2 for 30 days after that.')
         return null
       }
       setError(data.error || 'Search failed.')

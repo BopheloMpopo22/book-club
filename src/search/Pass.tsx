@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { authMessage, supabase } from '../lib/supabase.ts'
-import { paypalClientId, paypalPlanId } from './paypal.ts'
+import { paypalClientId } from './paypal.ts'
 
 type PaypalButtons = {
   render: (node: HTMLElement) => Promise<void>
@@ -10,9 +10,9 @@ type PaypalButtons = {
 
 type PaypalApi = {
   Buttons: (options: {
-    style?: { shape: 'pill'; color: 'gold'; layout: 'vertical'; label: 'subscribe' }
-    createSubscription: (data: unknown, actions: { subscription: { create: (body: { plan_id: string; custom_id: string }) => Promise<string> } }) => Promise<string>
-    onApprove: (data: { subscriptionID?: string }) => Promise<void>
+    style?: { shape: 'pill'; color: 'gold'; layout: 'vertical'; label: 'pay' }
+    createOrder: () => Promise<string>
+    onApprove: (data: { orderID?: string }) => Promise<void>
     onError: () => void
   }) => PaypalButtons
 }
@@ -39,38 +39,58 @@ export default function Pass({ onClose, onReady }: { onClose: () => void; onRead
   }, [])
 
   useEffect(() => {
-    if (!paypalClientId || window.paypal) return
+    if (!paypalClientId) return
+    const src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(paypalClientId)}&currency=USD&intent=capture&enable-funding=card&disable-funding=paylater,venmo,credit`
     let script = document.getElementById('paypal-sdk') as HTMLScriptElement | null
+    if (script && !script.src.includes('intent=capture')) {
+      script.remove()
+      delete window.paypal
+      script = null
+    }
     const done = () => setSdk(true)
     if (!script) {
       script = document.createElement('script')
       script.id = 'paypal-sdk'
-      script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(paypalClientId)}&vault=true&intent=subscription`
+      script.src = src
       script.onerror = () => setError('PayPal could not be loaded. Try again in a moment.')
       document.body.appendChild(script)
     }
+    if (window.paypal) return
     script.addEventListener('load', done)
     return () => script?.removeEventListener('load', done)
   }, [])
 
   useEffect(() => {
     const paypal = window.paypal
-    if (!sdk || !paypal || !session || !box.current || !paypalPlanId) return
+    if (!sdk || !paypal || !session || !box.current) return
     const node = box.current
     node.replaceChildren()
     let buttons: PaypalButtons | null = null
     let stop = false
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
+    }
     buttons = paypal.Buttons({
-      style: { shape: 'pill', color: 'gold', layout: 'vertical', label: 'subscribe' },
-      createSubscription: (_data, actions) => actions.subscription.create({ plan_id: paypalPlanId, custom_id: session.user.id }),
+      style: { shape: 'pill', color: 'gold', layout: 'vertical', label: 'pay' },
+      createOrder: async () => {
+        const response = await fetch('/api/paypal', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ action: 'create' }),
+        })
+        const body = (await response.json()) as { orderId?: string; error?: string }
+        if (!response.ok || !body.orderId) {
+          setError(body.error || 'PayPal could not start the payment.')
+          throw new Error('create')
+        }
+        return body.orderId
+      },
       onApprove: async (data) => {
         const response = await fetch('/api/paypal', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ subscriptionId: data.subscriptionID ?? '' }),
+          headers,
+          body: JSON.stringify({ orderId: data.orderID ?? '' }),
         })
         const body = (await response.json()) as { error?: string }
         if (!response.ok) {
@@ -104,9 +124,9 @@ export default function Pass({ onClose, onReady }: { onClose: () => void; onRead
   return (
     <section className="auth-card pass-card">
       <h2>Keep searching</h2>
-      <p className="meta">Five free searches are included. After that, Booksrec is $2 a month. Cancel any time in PayPal.</p>
+      <p className="meta">Five free searches are included. After that, $2 pays for 30 days. Use a card, or PayPal if you already have it. It does not renew.</p>
       {session ? (
-        <div id="paypal-button-container-P-7VP86448GS1036156NLUJWRA" ref={box} />
+        <div id="paypal-button-container" ref={box} />
       ) : (
         <form onSubmit={signIn}>
           <label>

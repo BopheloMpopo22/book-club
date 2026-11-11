@@ -861,7 +861,7 @@ async function meterSearch(request: Request, input: SearchInput): Promise<Respon
   const row = rows[0]
   if (!row) return null
   let until = row.pass_until ? new Date(row.pass_until).getTime() : 0
-  if (row.paypal_subscription_id && until < Date.now()) {
+  if (row.paypal_subscription_id?.startsWith('I-') && until < Date.now()) {
     const access = await paypalAccess()
     if (access) {
       const sub = await fetch(`https://api-m.paypal.com/v1/billing/subscriptions/${row.paypal_subscription_id}`, {
@@ -885,7 +885,7 @@ async function meterSearch(request: Request, input: SearchInput): Promise<Respon
   const used = row.searches_used ?? 0
   if (used >= FREE_SEARCHES) {
     return json(
-      { error: 'Five free searches are included. Booksrec is $2 a month after that.', code: 'pass' },
+      { error: 'Five free searches are included. Booksrec is $2 for 30 days after that.', code: 'pass' },
       402,
     )
   }
