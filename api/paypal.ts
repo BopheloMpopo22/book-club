@@ -50,7 +50,7 @@ type PaypalOrder = {
   purchase_units?: {
     custom_id?: string
     amount?: { currency_code?: string; value?: string }
-    payments?: { captures?: { status?: string; amount?: { currency_code?: string; value?: string } }[] }
+    payments?: { captures?: { status?: string; custom_id?: string; amount?: { currency_code?: string; value?: string } }[] }
   }[]
   message?: string
   details?: { issue?: string; description?: string }[]
@@ -69,14 +69,15 @@ function paypalProblem(body: PaypalOrder): string {
 
 function paidOrder(details: PaypalOrder, userId: string): boolean {
   const unit = details.purchase_units?.[0]
-  const capture = unit?.payments?.captures?.find((item) => item.status === 'COMPLETED') ?? unit?.payments?.captures?.[0]
+  const capture =
+    unit?.payments?.captures?.find((item) => item.status === 'COMPLETED' || item.status === 'PENDING') ??
+    unit?.payments?.captures?.[0]
   const amount = capture?.amount ?? unit?.amount
-  return (
-    details.status === 'COMPLETED' &&
-    amount?.currency_code === 'USD' &&
-    Number(amount.value) === 2 &&
-    unit?.custom_id === userId
-  )
+  const customId = capture?.custom_id || unit?.custom_id
+  const settled = details.status === 'COMPLETED' || capture?.status === 'COMPLETED' || capture?.status === 'PENDING'
+  if (!settled || amount?.currency_code !== 'USD' || Number(amount?.value) !== 2) return false
+  if (customId && customId !== userId) return false
+  return true
 }
 
 async function createOrder(userId: string, access: string): Promise<Response> {
